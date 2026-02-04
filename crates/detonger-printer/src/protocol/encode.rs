@@ -237,51 +237,63 @@ fn rasterize_png_to_rows(
 fn generate_width_test_rows(caps: &PrinterCaps, opts: &PrintOptions) -> Result<Vec<Vec<u8>>> {
     let w = caps.print_width_dots as i32;
     let byte_width = byte_width(caps.print_width_dots)?;
-
-    // Keep it short and low-power: sparse marks and a small pattern block.
     let height: i32 = 64;
     let x_off = opts.x_offset_dots as i32;
 
-    let mut rows: Vec<Vec<u8>> = Vec::with_capacity(height as usize);
+    let minor_step: i32 = 8; // ~1mm @203dpi
+    let mid_step: i32 = 40; // ~5mm @203dpi
+    let major_step: i32 = 80; // ~10mm @203dpi
+
+    let minor_len: i32 = std::cmp::min(8, height - 2);
+    let mid_len: i32 = std::cmp::min(12, height - 2);
+    let major_len: i32 = std::cmp::min(16, height - 2);
+
+    // Pre-allocate rows and then paint in-place to mirror the legacy "PNG width-test" output:
+    // - safe frame (vertical edges + corner segments)
+    // - ruler ticks at top & bottom
+    let mut rows: Vec<Vec<u8>> = vec![vec![0u8; byte_width]; height as usize];
+
+    // Safe frame: vertical edges (low per-row dot count).
     for y in 0..height {
-        let mut row = vec![0u8; byte_width];
+        let row = &mut rows[y as usize];
+        set_dot_msb_left_checked(row, w, 0 + x_off);
+        set_dot_msb_left_checked(row, w, (w - 1) + x_off);
+    }
 
-        // Diagonal guide (1 dot per row).
-        let x_diag = (y * (w - 1)) / (height - 1);
-        set_dot_msb_left_checked(&mut row, w, x_diag + x_off);
+    // Corner segments: avoid full-width solid horizontal lines.
+    let corner_len: i32 = 16;
+    for dx in 0..corner_len {
+        let x_l = dx;
+        let x_r = w - corner_len + dx;
+        set_dot_msb_left_checked(&mut rows[0], w, x_l + x_off);
+        set_dot_msb_left_checked(&mut rows[0], w, x_r + x_off);
+        set_dot_msb_left_checked(&mut rows[(height - 1) as usize], w, x_l + x_off);
+        set_dot_msb_left_checked(&mut rows[(height - 1) as usize], w, x_r + x_off);
+    }
 
-        // Edge + quarter marks every 8 rows.
-        if y % 8 == 0 {
-            for x in [0, w / 4, w / 2, (w * 3) / 4, w - 1] {
-                set_dot_msb_left_checked(&mut row, w, x + x_off);
+    // Ticks at top & bottom. Major ticks are thicker so they are easier to measure by eye.
+    for x in 0..w {
+        let (len, thick) = if x % major_step == 0 {
+            (major_len, 2)
+        } else if x % mid_step == 0 {
+            (mid_len, 1)
+        } else if x % minor_step == 0 {
+            (minor_len, 1)
+        } else {
+            continue;
+        };
+
+        for dx in 0..thick {
+            // Top tick: y=0..=len
+            for y in 0..=len {
+                set_dot_msb_left_checked(&mut rows[y as usize], w, x + dx + x_off);
+            }
+            // Bottom tick: y=(height-1-len)..=(height-1)
+            let y0 = (height - 1) - len;
+            for y in y0..height {
+                set_dot_msb_left_checked(&mut rows[y as usize], w, x + dx + x_off);
             }
         }
-
-        // Bottom ruler: dotted, sparse (avoid full-width solid rows).
-        if y == height - 1 {
-            let step = 16;
-            let mut x = 0;
-            while x < w {
-                set_dot_msb_left_checked(&mut row, w, x + x_off);
-                x += step;
-            }
-        }
-
-        // Center block: small checker-ish patch for bit order sanity.
-        let block_top = (height / 2) - 8;
-        let block_bottom = (height / 2) + 8;
-        if y >= block_top && y < block_bottom {
-            let block_w = 32;
-            let start_x = (w / 2) - (block_w / 2);
-            for bx in 0..block_w {
-                let on = ((bx / 4) + ((y - block_top) / 4)) % 2 == 0;
-                if on {
-                    set_dot_msb_left_checked(&mut row, w, start_x + bx + x_off);
-                }
-            }
-        }
-
-        rows.push(row);
     }
 
     Ok(rows)

@@ -6,6 +6,9 @@ use btleplug::platform::{Adapter, Manager, Peripheral};
 use crate::uuid::PRINTER_WRITE_CHARACTERISTIC_UUID;
 use crate::{DeviceId, DiscoveredDevice, Error, Result};
 
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
+const DISCOVER_TIMEOUT: Duration = Duration::from_secs(20);
+
 /// Opaque BLE connection state held by [`crate::PrinterConnection`].
 ///
 /// Keep btleplug types out of the public API so the crate surface stays stable
@@ -65,21 +68,46 @@ pub(crate) async fn connect(device: &DeviceId) -> Result<BlePrinterConnection> {
     // Best-effort stop.
     let _ = adapter.stop_scan().await;
 
-    if !peripheral
-        .is_connected()
-        .await
-        .map_err(map_btleplug_error)?
-    {
-        tokio::time::timeout(Duration::from_secs(15), peripheral.connect())
+    // macOS BLE connection/service discovery can be flaky; retry once on timeout.
+    for attempt in 1..=2u8 {
+        if !peripheral
+            .is_connected()
             .await
-            .map_err(|_| Error::Timeout)?
-            .map_err(map_btleplug_error)?;
-    }
+            .map_err(map_btleplug_error)?
+        {
+            match tokio::time::timeout(CONNECT_TIMEOUT, peripheral.connect()).await {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => {
+                    if attempt == 2 {
+                        return Err(map_btleplug_error(e));
+                    }
+                }
+                Err(_) => {
+                    if attempt == 2 {
+                        return Err(Error::Timeout);
+                    }
+                }
+            }
+        }
 
-    tokio::time::timeout(Duration::from_secs(15), peripheral.discover_services())
-        .await
-        .map_err(|_| Error::Timeout)?
-        .map_err(map_btleplug_error)?;
+        match tokio::time::timeout(DISCOVER_TIMEOUT, peripheral.discover_services()).await {
+            Ok(Ok(())) => break,
+            Ok(Err(e)) => {
+                if attempt == 2 {
+                    return Err(map_btleplug_error(e));
+                }
+            }
+            Err(_) => {
+                if attempt == 2 {
+                    return Err(Error::Timeout);
+                }
+            }
+        }
+
+        // Retry path: disconnect and try again.
+        let _ = tokio::time::timeout(Duration::from_secs(5), peripheral.disconnect()).await;
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
 
     let write_characteristic = peripheral
         .characteristics()
