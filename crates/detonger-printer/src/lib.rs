@@ -9,6 +9,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
 mod ble;
+pub mod protocol;
 mod uuid;
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -90,25 +91,46 @@ pub struct PrinterConnection {
     inner: ble::BlePrinterConnection,
 }
 
-pub async fn scan(_timeout: Duration) -> Result<Vec<DiscoveredDevice>> {
-    ble::scan(_timeout).await
+pub async fn scan(timeout: Duration) -> Result<Vec<DiscoveredDevice>> {
+    ble::scan(timeout).await
 }
 
-pub async fn connect(_device: &DeviceId) -> Result<PrinterConnection> {
-    let inner = ble::connect(_device).await?;
+pub async fn connect(device: &DeviceId) -> Result<PrinterConnection> {
+    let inner = ble::connect(device).await?;
     Ok(PrinterConnection { inner })
 }
 
 impl PrinterConnection {
-    pub async fn print_png(&mut self, _png: &[u8], _opts: &PrintOptions) -> Result<()> {
-        // Keep connection state reachable for the upcoming protocol/encoder work.
-        let _ = (&self.inner.peripheral, &self.inner.write_characteristic);
-        Err(Error::Unimplemented("print_png"))
+    pub async fn print_png(&mut self, png: &[u8], opts: &PrintOptions) -> Result<()> {
+        let caps = PrinterCaps::default();
+        let messages = protocol::encode_png_job_messages(png, &caps, opts)?;
+        self.write_vendor_messages(&messages).await
     }
 
-    pub async fn print_width_test(&mut self, _caps: &PrinterCaps, _opts: &PrintOptions) -> Result<()> {
-        // Keep connection state reachable for the upcoming protocol/encoder work.
-        let _ = (&self.inner.peripheral, &self.inner.write_characteristic);
-        Err(Error::Unimplemented("print_width_test"))
+    pub async fn print_width_test(&mut self, caps: &PrinterCaps, opts: &PrintOptions) -> Result<()> {
+        let messages = protocol::encode_width_test_job_messages(caps, opts)?;
+        self.write_vendor_messages(&messages).await
+    }
+
+    async fn write_vendor_messages(&mut self, messages: &[Vec<u8>]) -> Result<()> {
+        use btleplug::api::{Peripheral as _, WriteType};
+
+        // Conservative pacing based on the legacy replay script. Some firmwares can
+        // drop the connection if messages are sent too fast.
+        let delay = Duration::from_millis(5);
+
+        for msg in messages {
+            self.inner
+                .peripheral
+                .write(&self.inner.write_characteristic, msg, WriteType::WithoutResponse)
+                .await
+                .map_err(|e| Error::Ble(e.to_string()))?;
+
+            if !delay.is_zero() {
+                tokio::time::sleep(delay).await;
+            }
+        }
+
+        Ok(())
     }
 }
