@@ -1,0 +1,9 @@
+# Rust build artifacts
+target/
+
+# Local reverse engineering / legacy prototype (do not commit)
+refs/
+
+# OS noise
+.DS_Store
+
