@@ -122,6 +122,7 @@ impl PrinterConnection {
         // Conservative pacing based on the legacy replay script. Some firmwares can
         // drop the connection if messages are sent too fast.
         let delay = Duration::from_millis(5);
+        let wait_after = Duration::from_secs(2);
 
         for msg in messages {
             self.inner
@@ -137,6 +138,11 @@ impl PrinterConnection {
             if !delay.is_zero() {
                 tokio::time::sleep(delay).await;
             }
+        }
+
+        // Give the printer time to process/print before the connection is dropped by process exit.
+        if !wait_after.is_zero() {
+            tokio::time::sleep(wait_after).await;
         }
 
         Ok(())
