@@ -1,9 +1,11 @@
 use std::time::{Duration, Instant};
 
-use btleplug::api::{Central as _, Manager as _, Peripheral as _, ScanFilter};
+use btleplug::api::{
+    Central as _, CharPropFlags, Manager as _, Peripheral as _, ScanFilter, WriteType,
+};
 use btleplug::platform::{Adapter, Manager, Peripheral};
 
-use crate::uuid::PRINTER_WRITE_CHARACTERISTIC_UUID;
+use crate::uuid::{PRINTER_SERVICE_UUID, PRINTER_WRITE_CHARACTERISTIC_UUID};
 use crate::{DeviceId, DiscoveredDevice, Error, Result};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
@@ -16,6 +18,7 @@ const DISCOVER_TIMEOUT: Duration = Duration::from_secs(20);
 pub(crate) struct BlePrinterConnection {
     pub(crate) peripheral: Peripheral,
     pub(crate) write_characteristic: btleplug::api::Characteristic,
+    pub(crate) write_type: WriteType,
 }
 
 pub(crate) async fn scan(timeout: Duration) -> Result<Vec<DiscoveredDevice>> {
@@ -91,7 +94,7 @@ pub(crate) async fn connect(device: &DeviceId) -> Result<BlePrinterConnection> {
         }
 
         match tokio::time::timeout(DISCOVER_TIMEOUT, peripheral.discover_services()).await {
-            Ok(Ok(())) => break,
+            Ok(Ok(())) => {}
             Ok(Err(e)) => {
                 if attempt == 2 {
                     return Err(map_btleplug_error(e));
@@ -104,26 +107,34 @@ pub(crate) async fn connect(device: &DeviceId) -> Result<BlePrinterConnection> {
             }
         }
 
+        if let Some((write_characteristic, write_type)) = pick_write_characteristic(&peripheral) {
+            return Ok(BlePrinterConnection {
+                peripheral,
+                write_characteristic,
+                write_type,
+            });
+        }
+
+        if attempt == 2 {
+            let mut chars = peripheral
+                .characteristics()
+                .into_iter()
+                .map(|c| format!("{}({:?})", c.uuid, c.properties))
+                .collect::<Vec<_>>();
+            chars.sort();
+            return Err(Error::NotFound(format!(
+                "write characteristic {PRINTER_WRITE_CHARACTERISTIC_UUID} not found on device {} (discovered: {})",
+                device.0,
+                chars.join(", ")
+            )));
+        }
+
         // Retry path: disconnect and try again.
         let _ = tokio::time::timeout(Duration::from_secs(5), peripheral.disconnect()).await;
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
 
-    let write_characteristic = peripheral
-        .characteristics()
-        .into_iter()
-        .find(|c| c.uuid == PRINTER_WRITE_CHARACTERISTIC_UUID)
-        .ok_or_else(|| {
-            Error::NotFound(format!(
-                "write characteristic {} not found on device {}",
-                PRINTER_WRITE_CHARACTERISTIC_UUID, device.0
-            ))
-        })?;
-
-    Ok(BlePrinterConnection {
-        peripheral,
-        write_characteristic,
-    })
+    unreachable!("connect retry loop must return or error")
 }
 
 async fn default_adapter() -> Result<Adapter> {
@@ -176,4 +187,46 @@ fn map_btleplug_error(err: btleplug::Error) -> Error {
         ),
         other => Error::Ble(other.to_string()),
     }
+}
+
+fn pick_write_characteristic(
+    peripheral: &Peripheral,
+) -> Option<(btleplug::api::Characteristic, WriteType)> {
+    let chars = peripheral.characteristics();
+
+    // Preferred: exact UUID (as per known Detonger P2 captures).
+    let chosen = chars
+        .iter()
+        .find(|c| c.uuid == PRINTER_WRITE_CHARACTERISTIC_UUID)
+        .cloned()
+        .or_else(|| {
+            chars
+                .iter()
+                .filter(|c| c.service_uuid == PRINTER_SERVICE_UUID)
+                .find(|c| {
+                    c.properties.contains(CharPropFlags::WRITE)
+                        || c.properties.contains(CharPropFlags::WRITE_WITHOUT_RESPONSE)
+                })
+                .cloned()
+        })
+        .or_else(|| {
+            chars
+                .iter()
+                .find(|c| {
+                    c.properties.contains(CharPropFlags::WRITE)
+                        || c.properties.contains(CharPropFlags::WRITE_WITHOUT_RESPONSE)
+                })
+                .cloned()
+        })?;
+
+    let write_type = if chosen
+        .properties
+        .contains(CharPropFlags::WRITE_WITHOUT_RESPONSE)
+    {
+        WriteType::WithoutResponse
+    } else {
+        WriteType::WithResponse
+    };
+
+    Some((chosen, write_type))
 }

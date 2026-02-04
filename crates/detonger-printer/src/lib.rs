@@ -117,7 +117,7 @@ impl PrinterConnection {
     }
 
     async fn write_vendor_messages(&mut self, messages: &[Vec<u8>]) -> Result<()> {
-        use btleplug::api::{Peripheral as _, WriteType};
+        use btleplug::api::Peripheral as _;
 
         // Conservative pacing based on the legacy replay script. Some firmwares can
         // drop the connection if messages are sent too fast.
@@ -127,11 +127,7 @@ impl PrinterConnection {
         for msg in messages {
             self.inner
                 .peripheral
-                .write(
-                    &self.inner.write_characteristic,
-                    msg,
-                    WriteType::WithoutResponse,
-                )
+                .write(&self.inner.write_characteristic, msg, self.inner.write_type)
                 .await
                 .map_err(|e| Error::Ble(e.to_string()))?;
 
