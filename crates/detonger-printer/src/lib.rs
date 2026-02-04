@@ -8,6 +8,9 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
+mod ble;
+mod uuid;
+
 pub type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Debug, thiserror::Error)]
@@ -84,24 +87,28 @@ impl Default for PrintOptions {
 }
 
 pub struct PrinterConnection {
-    _priv: (),
+    inner: ble::BlePrinterConnection,
 }
 
 pub async fn scan(_timeout: Duration) -> Result<Vec<DiscoveredDevice>> {
-    Err(Error::Unimplemented("scan"))
+    ble::scan(_timeout).await
 }
 
 pub async fn connect(_device: &DeviceId) -> Result<PrinterConnection> {
-    Err(Error::Unimplemented("connect"))
+    let inner = ble::connect(_device).await?;
+    Ok(PrinterConnection { inner })
 }
 
 impl PrinterConnection {
     pub async fn print_png(&mut self, _png: &[u8], _opts: &PrintOptions) -> Result<()> {
+        // Keep connection state reachable for the upcoming protocol/encoder work.
+        let _ = (&self.inner.peripheral, &self.inner.write_characteristic);
         Err(Error::Unimplemented("print_png"))
     }
 
     pub async fn print_width_test(&mut self, _caps: &PrinterCaps, _opts: &PrintOptions) -> Result<()> {
+        // Keep connection state reachable for the upcoming protocol/encoder work.
+        let _ = (&self.inner.peripheral, &self.inner.write_characteristic);
         Err(Error::Unimplemented("print_width_test"))
     }
 }
-
