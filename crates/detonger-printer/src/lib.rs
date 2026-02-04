@@ -107,7 +107,11 @@ impl PrinterConnection {
         self.write_vendor_messages(&messages).await
     }
 
-    pub async fn print_width_test(&mut self, caps: &PrinterCaps, opts: &PrintOptions) -> Result<()> {
+    pub async fn print_width_test(
+        &mut self,
+        caps: &PrinterCaps,
+        opts: &PrintOptions,
+    ) -> Result<()> {
         let messages = protocol::encode_width_test_job_messages(caps, opts)?;
         self.write_vendor_messages(&messages).await
     }
@@ -122,7 +126,11 @@ impl PrinterConnection {
         for msg in messages {
             self.inner
                 .peripheral
-                .write(&self.inner.write_characteristic, msg, WriteType::WithoutResponse)
+                .write(
+                    &self.inner.write_characteristic,
+                    msg,
+                    WriteType::WithoutResponse,
+                )
                 .await
                 .map_err(|e| Error::Ble(e.to_string()))?;
 

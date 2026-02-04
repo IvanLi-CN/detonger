@@ -65,7 +65,11 @@ pub(crate) async fn connect(device: &DeviceId) -> Result<BlePrinterConnection> {
     // Best-effort stop.
     let _ = adapter.stop_scan().await;
 
-    if !peripheral.is_connected().await.map_err(map_btleplug_error)? {
+    if !peripheral
+        .is_connected()
+        .await
+        .map_err(map_btleplug_error)?
+    {
         tokio::time::timeout(Duration::from_secs(15), peripheral.connect())
             .await
             .map_err(|_| Error::Timeout)?
@@ -145,4 +149,3 @@ fn map_btleplug_error(err: btleplug::Error) -> Error {
         other => Error::Ble(other.to_string()),
     }
 }
-

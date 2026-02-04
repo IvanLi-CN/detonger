@@ -5,7 +5,9 @@ use std::{
 };
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
-use detonger_printer::{DeviceId, DiscoveredDevice, Error as PrinterError, PrintOptions, PrinterCaps};
+use detonger_printer::{
+    DeviceId, DiscoveredDevice, Error as PrinterError, PrintOptions, PrinterCaps,
+};
 use serde::Serialize;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -330,7 +332,12 @@ fn emit_print_ok(format: OutputFormat) {
 fn emit_print_error(format: OutputFormat, err: AppError) -> ExitCode {
     match format {
         OutputFormat::Human => {
-            let _ = writeln!(io::stderr(), "error({}): {}", err.code.as_i32(), err.message);
+            let _ = writeln!(
+                io::stderr(),
+                "error({}): {}",
+                err.code.as_i32(),
+                err.message
+            );
         }
         OutputFormat::Json => {
             let _ = write_json_stdout(&JsonCommandResult {

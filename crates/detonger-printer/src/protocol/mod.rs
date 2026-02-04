@@ -5,6 +5,5 @@
 pub mod encode;
 pub mod split;
 
-pub use encode::{encode_png_job_messages, encode_width_test_job_messages, FinalizeMode};
+pub use encode::{FinalizeMode, encode_png_job_messages, encode_width_test_job_messages};
 pub use split::split_vendor_messages;
-

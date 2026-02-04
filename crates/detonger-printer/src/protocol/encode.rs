@@ -38,13 +38,20 @@ impl Default for FinalizeMode {
 }
 
 /// Encode a PNG into vendor messages (ready to be sent as BLE writes).
-pub fn encode_png_job_messages(png: &[u8], caps: &PrinterCaps, opts: &PrintOptions) -> Result<Vec<Vec<u8>>> {
+pub fn encode_png_job_messages(
+    png: &[u8],
+    caps: &PrinterCaps,
+    opts: &PrintOptions,
+) -> Result<Vec<Vec<u8>>> {
     let rows = rasterize_png_to_rows(png, caps, opts)?;
     encode_bitmap_job_messages(&rows, caps, 1, FinalizeMode::default())
 }
 
 /// Generate a low-power width/alignment test pattern and encode it into vendor messages.
-pub fn encode_width_test_job_messages(caps: &PrinterCaps, opts: &PrintOptions) -> Result<Vec<Vec<u8>>> {
+pub fn encode_width_test_job_messages(
+    caps: &PrinterCaps,
+    opts: &PrintOptions,
+) -> Result<Vec<Vec<u8>>> {
     let rows = generate_width_test_rows(caps, opts)?;
     encode_bitmap_job_messages(&rows, caps, 1, FinalizeMode::default())
 }
@@ -185,9 +192,12 @@ fn byte_width(print_width_dots: u16) -> Result<usize> {
     Ok((print_width_dots / 8) as usize)
 }
 
-fn rasterize_png_to_rows(png: &[u8], caps: &PrinterCaps, opts: &PrintOptions) -> Result<Vec<Vec<u8>>> {
-    let img =
-        image::load_from_memory(png).map_err(|e| Error::Image(format!("png decode: {e}")))?;
+fn rasterize_png_to_rows(
+    png: &[u8],
+    caps: &PrinterCaps,
+    opts: &PrintOptions,
+) -> Result<Vec<Vec<u8>>> {
+    let img = image::load_from_memory(png).map_err(|e| Error::Image(format!("png decode: {e}")))?;
     let rgba = img.to_rgba8();
     let (w, h) = rgba.dimensions();
     let width_dots = caps.print_width_dots as i32;
@@ -311,9 +321,16 @@ mod tests {
         }
 
         // Ensure default behavior: do not emit end/print DzPackage frames.
-        assert!(!messages.iter().any(|m| m.starts_with(&[0x1f, CMD_PAGE_END])));
-        assert!(!messages.iter().any(|m| m.starts_with(&[0x1f, CMD_PAGE_PRINT])));
+        assert!(
+            !messages
+                .iter()
+                .any(|m| m.starts_with(&[0x1f, CMD_PAGE_END]))
+        );
+        assert!(
+            !messages
+                .iter()
+                .any(|m| m.starts_with(&[0x1f, CMD_PAGE_PRINT]))
+        );
         Ok(())
     }
 }
-
