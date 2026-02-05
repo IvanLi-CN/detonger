@@ -1,57 +1,93 @@
-use std::time::{Duration, Instant};
-
-use btleplug::api::{
-    Central as _, CharPropFlags, Manager as _, Peripheral as _, ScanFilter, WriteType,
+use std::{
+    collections::HashMap,
+    time::{Duration, Instant},
 };
-use btleplug::platform::{Adapter, Manager, Peripheral};
+
+use bluest::{Adapter, CharacteristicProperties, Uuid as BluestUuid};
+use futures::StreamExt as _;
 
 use crate::uuid::{PRINTER_SERVICE_UUID, PRINTER_WRITE_CHARACTERISTIC_UUID};
 use crate::{DeviceId, DiscoveredDevice, Error, Result};
 
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
-const DISCOVER_TIMEOUT: Duration = Duration::from_secs(20);
+const ADAPTER_TIMEOUT: Duration = Duration::from_secs(10);
+const SCAN_LOOKUP_TIMEOUT: Duration = Duration::from_secs(8);
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+const DISCOVER_TIMEOUT: Duration = Duration::from_secs(60);
+const CONNECTED_POLL_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Opaque BLE connection state held by [`crate::PrinterConnection`].
-///
-/// Keep btleplug types out of the public API so the crate surface stays stable
-/// even if we ever swap BLE backends.
 pub(crate) struct BlePrinterConnection {
-    pub(crate) peripheral: Peripheral,
-    pub(crate) write_characteristic: btleplug::api::Characteristic,
-    pub(crate) write_type: WriteType,
+    // On macOS, the adapter owns the connection lifecycle. Keep it alive for the duration of the
+    // printer connection so the link doesn't get torn down early.
+    #[allow(dead_code)]
+    adapter: Adapter,
+    #[allow(dead_code)]
+    device: bluest::Device,
+    write_characteristic: bluest::Characteristic,
+    write_without_response: bool,
+}
+
+impl BlePrinterConnection {
+    pub(crate) async fn write(&self, data: &[u8]) -> Result<()> {
+        if self.write_without_response {
+            tokio::time::timeout(
+                DISCOVER_TIMEOUT,
+                self.write_characteristic.write_without_response(data),
+            )
+            .await
+            .map_err(|_| Error::Timeout)?
+            .map_err(map_bluest_error)?;
+        } else {
+            tokio::time::timeout(DISCOVER_TIMEOUT, self.write_characteristic.write(data))
+                .await
+                .map_err(|_| Error::Timeout)?
+                .map_err(map_bluest_error)?;
+        }
+
+        Ok(())
+    }
 }
 
 pub(crate) async fn scan(timeout: Duration) -> Result<Vec<DiscoveredDevice>> {
     let adapter = default_adapter().await?;
 
-    adapter
-        .start_scan(ScanFilter::default())
-        .await
-        .map_err(map_btleplug_error)?;
+    let mut scan = adapter.scan(&[]).await.map_err(map_bluest_error)?;
 
-    if !timeout.is_zero() {
-        tokio::time::sleep(timeout).await;
-    }
+    let deadline = Instant::now() + timeout;
+    let mut seen: HashMap<String, DiscoveredDevice> = HashMap::new();
 
-    // Best-effort stop. Even if it fails, we can still return discovered devices.
-    let _ = adapter.stop_scan().await;
+    while Instant::now() < deadline {
+        let remaining = deadline.saturating_duration_since(Instant::now());
 
-    let peripherals = adapter.peripherals().await.map_err(map_btleplug_error)?;
-    let mut out = Vec::with_capacity(peripherals.len());
-
-    for p in peripherals {
-        let id = DeviceId(p.id().to_string());
-
-        let props = p.properties().await.map_err(map_btleplug_error)?;
-        let (name, rssi) = match props {
-            Some(props) => (props.local_name, props.rssi),
-            None => (None, None),
+        let next = tokio::time::timeout(remaining, scan.next()).await;
+        let adv = match next {
+            Ok(Some(v)) => v,
+            Ok(None) => break,
+            Err(_) => break,
         };
 
-        out.push(DiscoveredDevice { id, name, rssi });
+        let id = adv.device.id().to_string();
+        let name = adv.adv_data.local_name;
+        let rssi = adv.rssi;
+
+        seen.entry(id.clone())
+            .and_modify(|d| {
+                if d.name.is_none() {
+                    d.name = name.clone();
+                }
+                d.rssi = rssi.or(d.rssi);
+            })
+            .or_insert_with(|| DiscoveredDevice {
+                id: DeviceId(id),
+                name,
+                rssi,
+            });
     }
 
-    // Deterministic ordering for humans/tests.
+    // Dropping the stream stops scanning.
+    drop(scan);
+
+    let mut out: Vec<DiscoveredDevice> = seen.into_values().collect();
     out.sort_by(|a, b| a.id.0.cmp(&b.id.0));
     Ok(out)
 }
@@ -59,174 +95,197 @@ pub(crate) async fn scan(timeout: Duration) -> Result<Vec<DiscoveredDevice>> {
 pub(crate) async fn connect(device: &DeviceId) -> Result<BlePrinterConnection> {
     let adapter = default_adapter().await?;
 
-    // On macOS/CoreBluetooth, peripherals are only known once discovered via scan.
-    // Btleplug's CoreBluetooth backend cannot "add" a peripheral from an ID.
-    adapter
-        .start_scan(ScanFilter::default())
+    let debug = std::env::var_os("DETONGER_DEBUG").is_some();
+    if debug {
+        eprintln!("[detonger] connect: scanning for device id {}...", device.0);
+    }
+
+    let dev = find_device_by_id(&adapter, &device.0, SCAN_LOOKUP_TIMEOUT).await?;
+
+    if debug {
+        eprintln!("[detonger] connect: connecting...");
+    }
+
+    tokio::time::timeout(CONNECT_TIMEOUT, adapter.connect_device(&dev))
         .await
-        .map_err(map_btleplug_error)?;
+        .map_err(|_| Error::Timeout)?
+        .map_err(map_bluest_error)?;
 
-    let peripheral = find_peripheral_by_id(&adapter, device, Duration::from_secs(5)).await?;
-
-    // Best-effort stop.
-    let _ = adapter.stop_scan().await;
-
-    // macOS BLE connection/service discovery can be flaky; retry once on timeout.
-    for attempt in 1..=2u8 {
-        if !peripheral
-            .is_connected()
-            .await
-            .map_err(map_btleplug_error)?
-        {
-            match tokio::time::timeout(CONNECT_TIMEOUT, peripheral.connect()).await {
-                Ok(Ok(())) => {}
-                Ok(Err(e)) => {
-                    if attempt == 2 {
-                        return Err(map_btleplug_error(e));
-                    }
-                }
-                Err(_) => {
-                    if attempt == 2 {
-                        return Err(Error::Timeout);
-                    }
-                }
-            }
+    // On macOS, `connect_device` may return before the device is fully connected/ready for GATT.
+    // Poll briefly to avoid immediately timing out on service discovery.
+    let poll_deadline = Instant::now() + CONNECTED_POLL_TIMEOUT;
+    while !dev.is_connected().await {
+        if Instant::now() >= poll_deadline {
+            return Err(Error::Timeout);
         }
-
-        match tokio::time::timeout(DISCOVER_TIMEOUT, peripheral.discover_services()).await {
-            Ok(Ok(())) => {}
-            Ok(Err(e)) => {
-                if attempt == 2 {
-                    return Err(map_btleplug_error(e));
-                }
-            }
-            Err(_) => {
-                if attempt == 2 {
-                    return Err(Error::Timeout);
-                }
-            }
-        }
-
-        if let Some((write_characteristic, write_type)) = pick_write_characteristic(&peripheral) {
-            return Ok(BlePrinterConnection {
-                peripheral,
-                write_characteristic,
-                write_type,
-            });
-        }
-
-        if attempt == 2 {
-            let mut chars = peripheral
-                .characteristics()
-                .into_iter()
-                .map(|c| format!("{}({:?})", c.uuid, c.properties))
-                .collect::<Vec<_>>();
-            chars.sort();
-            return Err(Error::NotFound(format!(
-                "write characteristic {PRINTER_WRITE_CHARACTERISTIC_UUID} not found on device {} (discovered: {})",
-                device.0,
-                chars.join(", ")
-            )));
-        }
-
-        // Retry path: disconnect and try again.
-        let _ = tokio::time::timeout(Duration::from_secs(5), peripheral.disconnect()).await;
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
 
-    unreachable!("connect retry loop must return or error")
+    if debug {
+        eprintln!("[detonger] connect: connected");
+    }
+
+    // Discover just the service/characteristic we need.
+    if debug {
+        eprintln!(
+            "[detonger] connect: discovering service {} (timeout={:?})...",
+            PRINTER_SERVICE_UUID, DISCOVER_TIMEOUT
+        );
+    }
+
+    let t0 = Instant::now();
+    let services = tokio::time::timeout(
+        DISCOVER_TIMEOUT,
+        dev.discover_services_with_uuid(PRINTER_SERVICE_UUID),
+    )
+    .await;
+    if debug {
+        eprintln!(
+            "[detonger] connect: service discovery finished after {:?}",
+            t0.elapsed()
+        );
+    }
+    let services = services
+        .map_err(|_| Error::Timeout)?
+        .map_err(map_bluest_error)?;
+
+    if debug {
+        eprintln!(
+            "[detonger] connect: service discovered (count={})",
+            services.len()
+        );
+    }
+
+    let service = services.into_iter().next().ok_or_else(|| {
+        Error::NotFound(format!(
+            "service {PRINTER_SERVICE_UUID} not found on device {}",
+            device.0
+        ))
+    })?;
+
+    if debug {
+        eprintln!(
+            "[detonger] connect: discovering characteristic {} (timeout={:?})...",
+            PRINTER_WRITE_CHARACTERISTIC_UUID, DISCOVER_TIMEOUT
+        );
+    }
+
+    let t0 = Instant::now();
+    let chars = tokio::time::timeout(
+        DISCOVER_TIMEOUT,
+        service.discover_characteristics_with_uuid(PRINTER_WRITE_CHARACTERISTIC_UUID),
+    )
+    .await;
+    if debug {
+        eprintln!(
+            "[detonger] connect: characteristic discovery finished after {:?}",
+            t0.elapsed()
+        );
+    }
+    let chars = chars
+        .map_err(|_| Error::Timeout)?
+        .map_err(map_bluest_error)?;
+
+    if debug {
+        eprintln!(
+            "[detonger] connect: characteristic discovered (count={})",
+            chars.len()
+        );
+    }
+
+    let write_characteristic = chars.into_iter().next().ok_or_else(|| {
+        Error::NotFound(format!(
+            "write characteristic {PRINTER_WRITE_CHARACTERISTIC_UUID} not found on device {}",
+            device.0
+        ))
+    })?;
+
+    let props = write_characteristic
+        .properties()
+        .await
+        .map_err(map_bluest_error)?;
+
+    let (write_without_response, _props) = pick_write_mode(&props)?;
+
+    if debug {
+        eprintln!(
+            "[detonger] connect: ready (write_without_response={})",
+            write_without_response
+        );
+    }
+
+    Ok(BlePrinterConnection {
+        adapter,
+        device: dev,
+        write_characteristic,
+        write_without_response,
+    })
 }
 
 async fn default_adapter() -> Result<Adapter> {
-    // Adapter bring-up on macOS waits for a CoreBluetooth state update; wrap it so
-    // we don't hang forever if permission is missing or Bluetooth is off.
-    let adapters = tokio::time::timeout(Duration::from_secs(10), async {
-        let manager = Manager::new().await?;
-        manager.adapters().await
-    })
-    .await
-    .map_err(|_| Error::Timeout)?
-    .map_err(map_btleplug_error)?;
+    let adapter = Adapter::default()
+        .await
+        .ok_or_else(|| Error::Ble("no bluetooth adapters found".to_string()))?;
 
-    adapters
-        .into_iter()
-        .next()
-        .ok_or_else(|| Error::Ble("no bluetooth adapters found".to_string()))
+    tokio::time::timeout(ADAPTER_TIMEOUT, adapter.wait_available())
+        .await
+        .map_err(|_| Error::Timeout)?
+        .map_err(map_bluest_error)?;
+
+    Ok(adapter)
 }
 
-async fn find_peripheral_by_id(
+async fn find_device_by_id(
     adapter: &Adapter,
-    device: &DeviceId,
+    id_str: &str,
     timeout: Duration,
-) -> Result<Peripheral> {
+) -> Result<bluest::Device> {
+    let mut scan = adapter.scan(&[]).await.map_err(map_bluest_error)?;
+
     let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        let next = tokio::time::timeout(remaining, scan.next()).await;
+        let adv = match next {
+            Ok(Some(v)) => v,
+            Ok(None) => break,
+            Err(_) => break,
+        };
 
-    loop {
-        let peripherals = adapter.peripherals().await.map_err(map_btleplug_error)?;
-        if let Some(p) = peripherals
-            .into_iter()
-            .find(|p| p.id().to_string() == device.0)
-        {
-            return Ok(p);
+        if adv.device.id().to_string() == id_str {
+            drop(scan);
+            return Ok(adv.device);
         }
+    }
 
-        if Instant::now() >= deadline {
-            return Err(Error::NotFound(format!("device {} not found", device.0)));
-        }
+    drop(scan);
+    Err(Error::NotFound(format!("device {id_str} not found")))
+}
 
-        tokio::time::sleep(Duration::from_millis(200)).await;
+fn pick_write_mode(props: &CharacteristicProperties) -> Result<(bool, CharacteristicProperties)> {
+    if props.write_without_response {
+        return Ok((true, *props));
+    }
+    if props.write {
+        return Ok((false, *props));
+    }
+    Err(Error::NotFound(
+        "write characteristic does not support write".to_string(),
+    ))
+}
+
+fn map_bluest_error(err: bluest::Error) -> Error {
+    use bluest::error::ErrorKind as K;
+    match err.kind() {
+        K::Timeout => Error::Ble(err.to_string()),
+        K::NotFound => Error::NotFound(err.to_string()),
+        K::InvalidParameter => Error::InvalidArgument(err.to_string()),
+        // On macOS, this is commonly the "Bluetooth permission not granted" case.
+        K::NotAuthorized => Error::Ble(err.to_string()),
+        other => Error::Ble(format!("{other}: {}", err.message())),
     }
 }
 
-fn map_btleplug_error(err: btleplug::Error) -> Error {
-    match err {
-        btleplug::Error::DeviceNotFound => Error::NotFound("device not found".to_string()),
-        btleplug::Error::TimedOut(_) => Error::Timeout,
-        btleplug::Error::PermissionDenied => Error::Ble(
-            "permission denied (macOS: grant Bluetooth permission to your terminal app in System Settings -> Privacy & Security -> Bluetooth)".to_string(),
-        ),
-        other => Error::Ble(other.to_string()),
-    }
-}
-
-fn pick_write_characteristic(
-    peripheral: &Peripheral,
-) -> Option<(btleplug::api::Characteristic, WriteType)> {
-    let chars = peripheral.characteristics();
-
-    // Preferred: exact UUID (as per known Detonger P2 captures).
-    let chosen = chars
-        .iter()
-        .find(|c| c.uuid == PRINTER_WRITE_CHARACTERISTIC_UUID)
-        .cloned()
-        .or_else(|| {
-            chars
-                .iter()
-                .filter(|c| c.service_uuid == PRINTER_SERVICE_UUID)
-                .find(|c| {
-                    c.properties.contains(CharPropFlags::WRITE)
-                        || c.properties.contains(CharPropFlags::WRITE_WITHOUT_RESPONSE)
-                })
-                .cloned()
-        })
-        .or_else(|| {
-            chars
-                .iter()
-                .find(|c| {
-                    c.properties.contains(CharPropFlags::WRITE)
-                        || c.properties.contains(CharPropFlags::WRITE_WITHOUT_RESPONSE)
-                })
-                .cloned()
-        })?;
-
-    let write_type = if chosen
-        .properties
-        .contains(CharPropFlags::WRITE_WITHOUT_RESPONSE)
-    {
-        WriteType::WithoutResponse
-    } else {
-        WriteType::WithResponse
-    };
-
-    Some((chosen, write_type))
-}
+// Keep a stable UUID type identity in this module (helps avoid confusing imports).
+#[allow(dead_code)]
+fn _assert_uuid_types_are_compatible(_u: BluestUuid) {}

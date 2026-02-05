@@ -117,19 +117,26 @@ impl PrinterConnection {
     }
 
     async fn write_vendor_messages(&mut self, messages: &[Vec<u8>]) -> Result<()> {
-        use btleplug::api::Peripheral as _;
-
         // Conservative pacing based on the legacy replay script. Some firmwares can
         // drop the connection if messages are sent too fast.
         let delay = Duration::from_millis(5);
+        let write_timeout = Duration::from_secs(5);
         let wait_after = Duration::from_secs(2);
 
+        let debug = std::env::var_os("DETONGER_DEBUG").is_some();
+        if debug {
+            eprintln!(
+                "[detonger] write: start (messages={}, delay={:?}, write_timeout={:?})",
+                messages.len(),
+                delay,
+                write_timeout
+            );
+        }
+
         for msg in messages {
-            self.inner
-                .peripheral
-                .write(&self.inner.write_characteristic, msg, self.inner.write_type)
+            tokio::time::timeout(write_timeout, self.inner.write(msg))
                 .await
-                .map_err(|e| Error::Ble(e.to_string()))?;
+                .map_err(|_| Error::Timeout)??;
 
             if !delay.is_zero() {
                 tokio::time::sleep(delay).await;
@@ -139,6 +146,10 @@ impl PrinterConnection {
         // Give the printer time to process/print before the connection is dropped by process exit.
         if !wait_after.is_zero() {
             tokio::time::sleep(wait_after).await;
+        }
+
+        if debug {
+            eprintln!("[detonger] write: done");
         }
 
         Ok(())

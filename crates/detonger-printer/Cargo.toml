@@ -5,9 +5,10 @@ edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-btleplug.workspace = true
+bluest.workspace = true
 futures.workspace = true
 image.workspace = true
+objc2.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
