@@ -47,12 +47,22 @@ detonger print width-test --device <id> [--width <dots>] [--height <dots>] [--x-
 
 - 用于校准打印宽度与水平位置；默认宽度取目标打印头宽度。
 
+#### preview width-test
+
+```text
+detonger preview width-test --out <path> [--width <dots>] [--x-offset <dots>] [--scale <factor>]
+```
+
+- 生成 `print width-test` 的 PNG 预览图（不连接打印机、不耗材）。
+- `--scale` 默认 `4`，用于把 dots 放大为更易观察的像素图。
+
 ### 输出（Output）
 
 - Format: `human` 或 `json`
 - `json`（示意）：
   - `scan`: `[{ "device": "...", "name": "...", "rssi": -60 }]`
   - `print`: `{ "status": "ok" }` 或 `{ "status": "error", "error": { ... } }`
+  - `preview`: `{ "status": "ok", "out": "/path/to/file.png" }` 或 `{ "status": "error", "error": { ... } }`
 
 ### 退出码（Exit codes）
 

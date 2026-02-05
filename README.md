@@ -16,7 +16,34 @@ On macOS, the terminal running `detonger` must have Bluetooth permission.
 
 System Settings -> Privacy & Security -> Bluetooth -> enable your terminal app.
 
-## CLI (planned contract)
+## Docs
 
-See `docs/plan/cdwzw-rust-workspace-reinit/contracts/cli.md`.
+- `docs/ble.md`: BLE/GATT UUIDs + macOS setup
+- `docs/protocol.md`: protocol framing notes (header/bitmap/finalize)
+- `docs/runbook.md`: manual validation steps (paper-saving)
 
+## CLI
+
+Scan for printers:
+
+```bash
+cargo run -q -p detonger -- scan --timeout-s 6
+```
+
+Generate a PNG preview (no printer needed):
+
+```bash
+cargo run -q -p detonger -- preview width-test --out /tmp/detonger-width-test.png
+```
+
+Print the width-test pattern:
+
+```bash
+cargo run -q -p detonger -- print width-test --device <device-id>
+```
+
+Print a PNG:
+
+```bash
+cargo run -q -p detonger -- print png --device <device-id> --png /path/to/file.png
+```

@@ -2,9 +2,9 @@
 
 ## 状态
 
-- Status: 待实现
+- Status: 已完成
 - Created: 2026-02-04
-- Last: 2026-02-04
+- Last: 2026-02-05
 
 ## 背景 / 问题陈述
 
@@ -115,7 +115,7 @@
 - 接口契约已定稿，实现与测试可以直接按契约落地
 - 关键取舍已确认：
   - 目标平台：macOS only
-  - BLE crate：`btleplug`（Tokio runtime）
+  - BLE crate：`bluest`（CoreBluetooth backend）
   - `refs/`：仅本地逆向/信息收集参考，不入库（Git ignore）
   - pure Rust：主工程不依赖 Node/Python
 
@@ -151,12 +151,12 @@ None
 
 ## 实现里程碑（Milestones）
 
-- [ ] M1: Repo re-init（仅保留 Rust workspace + docs；原型移动到 `refs/` 并 gitignore；预留 `web/` 目录位）
-- [ ] M2: `detonger-printer`：BLE transport（scan/connect/write characteristic；macOS 权限说明落入 docs）
-- [ ] M3: 协议层（构建 Dz frame + bitmap 命令；确保“按 vendor message 边界写入”不会出现“只走纸不出字”）
-- [ ] M4: 编码层（PNG decode + threshold + x-offset；生成 width-test pattern；输出可打印 job）
-- [ ] M5: `detonger` CLI（scan / print png / print width-test；human+json 输出；明确退出码）
-- [ ] M6: 手工验收与回归说明（用一张标签完成宽度/偏移校准；确认不跳纸；写入 runbook）
+- [x] M1: Repo re-init（仅保留 Rust workspace + docs；原型移动到 `refs/` 并 gitignore；预留 `web/` 目录位）
+- [x] M2: `detonger-printer`：BLE transport（scan/connect/write characteristic；macOS 权限说明落入 docs）
+- [x] M3: 协议层（构建 Dz frame + bitmap 命令；确保“按 vendor message 边界写入”不会出现“只走纸不出字”）
+- [x] M4: 编码层（PNG decode + threshold + x-offset；生成 width-test pattern；输出可打印 job）
+- [x] M5: `detonger` CLI（scan / print png / print width-test；human+json 输出；明确退出码）
+- [x] M6: 手工验收与回归说明（用一张标签完成宽度/偏移校准；确认不跳纸；写入 runbook）
 
 ## 方案概述（Approach, high-level）
 
@@ -166,7 +166,7 @@ None
 - BLE 通信层与协议/编码层分离：
   - transport 负责：扫描/连接/写入/（可选）notify
   - protocol/encoder 负责：把“要打印的内容”变成设备可执行的 vendor messages
-- BLE transport 默认选择：`btleplug`（Tokio runtime）
+- BLE transport 默认选择：`bluest`（CoreBluetooth backend）
 - 为避免实现依赖 `refs/`：需要把关键协议常量（服务/特征 UUID、默认 DPI/宽度、已知结束走纸行为约束等）沉淀为提交内文档与代码常量。
   - 已验证的一条关键约束：避免发送“重复的结束/走纸指令”，否则可能导致标签对齐多走纸（跳纸）
 
@@ -189,6 +189,7 @@ None
 ## 变更记录（Change log）
 
 - 2026-02-04: 创建计划并冻结为 `待实现`（macOS-only；refs 不入库；pure Rust；CLI/Rust API 契约冻结）。
+- 2026-02-05: 完成实现与手工验收：CLI 支持 scan/print/preview；协议编码与分包；默认不发送 job finalization 以避免跳纸；macOS BLE 后端使用 `bluest`。
 
 ## 参考（References）
 

@@ -60,4 +60,4 @@
 
 | ID   | Title | Status | Plan | Last | Notes |
 |-----:|-------|--------|------|------|-------|
-| cdwzw | Rust 工程重置：BLE 打印库 + CLI | 待实现 | `cdwzw-rust-workspace-reinit/PLAN.md` | 2026-02-04 | macOS-only；refs 不入库；pure Rust |
+| cdwzw | Rust 工程重置：BLE 打印库 + CLI | 已完成 | `cdwzw-rust-workspace-reinit/PLAN.md` | 2026-02-05 | macOS-only；refs 不入库；pure Rust；bluest backend |
