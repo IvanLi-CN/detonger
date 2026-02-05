@@ -2,6 +2,11 @@
 
 Rust workspace for talking to **DeTong / Detonger** label printers over BLE (macOS-first).
 
+## Supported / tested printers
+
+- Tested: DeTong / Detonger P2 (德佟印立方 P2)
+- Other models: not tested, may not work (protocol and GATT UUIDs may differ)
+
 ## Layout
 
 - `crates/detonger-printer`: Rust library (BLE transport + protocol/encoding)
