@@ -2,6 +2,8 @@ use crate::{Error, PrintOptions, PrinterCaps, Result};
 
 use super::split::split_vendor_messages;
 
+use std::io::Cursor;
+
 const SYNC: u8 = 0x1F;
 const DZPKG_CRC_CONST: u8 = 0x88;
 
@@ -22,19 +24,10 @@ const CMD_BITMAP_PRINT: u8 = 0x2B;
 /// Optional job-finalization frames.
 ///
 /// IMPORTANT: Default is to NOT send them due to observed double-advance issues.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct FinalizeMode {
     pub include_page_end: bool,
     pub include_page_print: bool,
-}
-
-impl Default for FinalizeMode {
-    fn default() -> Self {
-        Self {
-            include_page_end: false,
-            include_page_print: false,
-        }
-    }
 }
 
 /// Encode a PNG into vendor messages (ready to be sent as BLE writes).
@@ -54,6 +47,22 @@ pub fn encode_width_test_job_messages(
 ) -> Result<Vec<Vec<u8>>> {
     let rows = generate_width_test_rows(caps, opts)?;
     encode_bitmap_job_messages(&rows, caps, 1, FinalizeMode::default())
+}
+
+/// Render the width-test pattern as a PNG (useful to preview what `print width-test` draws).
+///
+/// `scale` enlarges the output for visibility (e.g. `4` => 4x pixels).
+pub fn render_width_test_png(
+    caps: &PrinterCaps,
+    opts: &PrintOptions,
+    scale: u32,
+) -> Result<Vec<u8>> {
+    if scale == 0 {
+        return Err(Error::InvalidArgument("scale must be >= 1".into()));
+    }
+
+    let rows = generate_width_test_rows(caps, opts)?;
+    render_rows_to_png(&rows, caps.print_width_dots, scale)
 }
 
 /// Build a single-job byte stream, then split it into vendor messages.
@@ -184,7 +193,7 @@ fn encode_bitmap_row(row_bytes: &[u8]) -> Result<Vec<u8>> {
 }
 
 fn byte_width(print_width_dots: u16) -> Result<usize> {
-    if print_width_dots % 8 != 0 {
+    if !print_width_dots.is_multiple_of(8) {
         return Err(Error::InvalidArgument(format!(
             "print_width_dots must be divisible by 8: got={print_width_dots}"
         )));
@@ -256,7 +265,7 @@ fn generate_width_test_rows(caps: &PrinterCaps, opts: &PrintOptions) -> Result<V
     // Safe frame: vertical edges (low per-row dot count).
     for y in 0..height {
         let row = &mut rows[y as usize];
-        set_dot_msb_left_checked(row, w, 0 + x_off);
+        set_dot_msb_left_checked(row, w, x_off);
         set_dot_msb_left_checked(row, w, (w - 1) + x_off);
     }
 
@@ -312,6 +321,63 @@ fn set_dot_msb_left_checked(row_bytes: &mut [u8], width_dots: i32, x: i32) {
     set_dot_msb_left(row_bytes, x as usize);
 }
 
+fn render_rows_to_png(rows: &[Vec<u8>], width_dots: u16, scale: u32) -> Result<Vec<u8>> {
+    let w: u32 = width_dots.into();
+    let h: u32 = rows
+        .len()
+        .try_into()
+        .map_err(|_| Error::InvalidArgument("bitmap too tall".into()))?;
+
+    let byte_width = byte_width(width_dots)?;
+
+    let mut img = image::GrayImage::from_pixel(w, h, image::Luma([255u8]));
+
+    for (y, row) in rows.iter().enumerate() {
+        if row.len() != byte_width {
+            return Err(Error::InvalidArgument(format!(
+                "row byte width mismatch: got={} want={byte_width}",
+                row.len()
+            )));
+        }
+
+        for x in 0..(w as usize) {
+            let byte_idx = x / 8;
+            let bit = 7 - (x % 8);
+            let is_black = (row[byte_idx] & (1u8 << bit)) != 0;
+            if is_black {
+                img.put_pixel(x as u32, y as u32, image::Luma([0u8]));
+            }
+        }
+    }
+
+    // Nearest-neighbor scale (repeat pixels), to avoid pulling in extra image features.
+    let img = if scale == 1 {
+        img
+    } else {
+        let mut scaled = image::GrayImage::from_pixel(w * scale, h * scale, image::Luma([255u8]));
+        for y in 0..h {
+            for x in 0..w {
+                let px = *img.get_pixel(x, y);
+                if px.0[0] == 255 {
+                    continue;
+                }
+                for dy in 0..scale {
+                    for dx in 0..scale {
+                        scaled.put_pixel(x * scale + dx, y * scale + dy, px);
+                    }
+                }
+            }
+        }
+        scaled
+    };
+
+    let mut out = Vec::new();
+    image::DynamicImage::ImageLuma8(img)
+        .write_to(&mut Cursor::new(&mut out), image::ImageFormat::Png)
+        .map_err(|e| Error::Image(format!("png encode: {e}")))?;
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -343,6 +409,20 @@ mod tests {
                 .iter()
                 .any(|m| m.starts_with(&[0x1f, CMD_PAGE_PRINT]))
         );
+        Ok(())
+    }
+
+    #[test]
+    fn width_test_preview_png_dimensions() -> Result<()> {
+        let caps = PrinterCaps::default();
+        let opts = PrintOptions::default();
+
+        let png = render_width_test_png(&caps, &opts, 4)?;
+        let img =
+            image::load_from_memory(&png).map_err(|e| Error::Image(format!("png decode: {e}")))?;
+
+        assert_eq!(img.width(), (caps.print_width_dots as u32) * 4);
+        assert_eq!(img.height(), 64 * 4);
         Ok(())
     }
 }

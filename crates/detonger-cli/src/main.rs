@@ -35,6 +35,10 @@ enum Command {
     /// Print operations.
     #[command(subcommand)]
     Print(PrintCommand),
+
+    /// Generate previews without talking to the printer.
+    #[command(subcommand)]
+    Preview(PreviewCommand),
 }
 
 #[derive(Debug, Args)]
@@ -52,6 +56,32 @@ enum PrintCommand {
     /// Print a calibration pattern for width/offset.
     #[command(name = "width-test")]
     WidthTest(PrintWidthTestArgs),
+}
+
+#[derive(Debug, Subcommand)]
+enum PreviewCommand {
+    /// Render the width-test pattern into a PNG file.
+    #[command(name = "width-test")]
+    WidthTest(PreviewWidthTestArgs),
+}
+
+#[derive(Debug, Args)]
+struct PreviewWidthTestArgs {
+    /// Output PNG file path.
+    #[arg(long)]
+    out: PathBuf,
+
+    /// Pattern width in dots (defaults to the printhead width).
+    #[arg(long)]
+    width: Option<u16>,
+
+    /// Horizontal offset in dots (negative shifts left).
+    #[arg(long = "x-offset", default_value_t = 0, allow_hyphen_values = true)]
+    x_offset: i16,
+
+    /// PNG preview scale factor (4 makes the pattern easier to see).
+    #[arg(long, default_value_t = 4)]
+    scale: u32,
 }
 
 #[derive(Debug, Args)]
@@ -170,6 +200,8 @@ struct JsonScanDevice<'a> {
 struct JsonCommandResult {
     status: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
+    out: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<JsonError>,
 }
 
@@ -186,6 +218,7 @@ async fn main() {
     let exit_code = match cli.command {
         Command::Scan(args) => cmd_scan(cli.format, args).await,
         Command::Print(cmd) => cmd_print(cli.format, cmd).await,
+        Command::Preview(cmd) => cmd_preview(cli.format, cmd).await,
     };
 
     std::process::exit(exit_code.as_i32());
@@ -231,6 +264,52 @@ async fn cmd_print(format: OutputFormat, cmd: PrintCommand) -> ExitCode {
         PrintCommand::Png(args) => cmd_print_png(format, args).await,
         PrintCommand::WidthTest(args) => cmd_print_width_test(format, args).await,
     }
+}
+
+async fn cmd_preview(format: OutputFormat, cmd: PreviewCommand) -> ExitCode {
+    match cmd {
+        PreviewCommand::WidthTest(args) => cmd_preview_width_test(format, args).await,
+    }
+}
+
+async fn cmd_preview_width_test(format: OutputFormat, args: PreviewWidthTestArgs) -> ExitCode {
+    let default_caps = PrinterCaps::default();
+    let caps = PrinterCaps {
+        dpi: default_caps.dpi,
+        print_width_dots: args.width.unwrap_or(default_caps.print_width_dots),
+    };
+
+    let opts = PrintOptions {
+        threshold: PrintOptions::default().threshold,
+        x_offset_dots: args.x_offset,
+    };
+
+    let png =
+        match detonger_printer::protocol::encode::render_width_test_png(&caps, &opts, args.scale) {
+            Ok(v) => v,
+            Err(e) => return emit_print_error(format, AppError::from_printer_error(e)),
+        };
+
+    if let Err(e) = std::fs::write(&args.out, &png) {
+        let err = AppError::usage(format!(
+            "failed to write png at {}: {e}",
+            args.out.display()
+        ));
+        return emit_print_error(format, err);
+    }
+
+    match format {
+        OutputFormat::Human => println!("wrote {}", args.out.display()),
+        OutputFormat::Json => {
+            let _ = write_json_stdout(&JsonCommandResult {
+                status: "ok",
+                out: Some(args.out.display().to_string()),
+                error: None,
+            });
+        }
+    }
+
+    ExitCode::Success
 }
 
 async fn cmd_print_png(format: OutputFormat, args: PrintPngArgs) -> ExitCode {
@@ -323,6 +402,7 @@ fn emit_print_ok(format: OutputFormat) {
         OutputFormat::Json => {
             let _ = write_json_stdout(&JsonCommandResult {
                 status: "ok",
+                out: None,
                 error: None,
             });
         }
@@ -342,6 +422,7 @@ fn emit_print_error(format: OutputFormat, err: AppError) -> ExitCode {
         OutputFormat::Json => {
             let _ = write_json_stdout(&JsonCommandResult {
                 status: "error",
+                out: None,
                 error: Some(JsonError {
                     kind: err.kind,
                     message: err.message.clone(),
