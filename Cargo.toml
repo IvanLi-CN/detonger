@@ -1,8 +1,10 @@
 [workspace]
 resolver = "2"
 members = [
+  "crates/detonger-protocol",
   "crates/detonger-printer",
   "crates/detonger-cli",
+  "crates/detonger-wasm",
 ]
 
 [workspace.package]

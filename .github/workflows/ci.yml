@@ -1,0 +1,76 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - "th/**"
+
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.91.0
+          components: rustfmt, clippy
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: cargo fmt
+        run: cargo fmt --check
+
+      - name: cargo clippy
+        run: cargo clippy -- -D warnings
+
+      - name: cargo test
+        run: cargo test
+
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.91.0
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install wasm-pack
+        run: cargo install wasm-pack --locked
+
+      - name: Install web dependencies
+        working-directory: web/app
+        run: bun install --frozen-lockfile
+
+      - name: Lint
+        working-directory: web/app
+        run: bun run lint
+
+      - name: Unit tests
+        working-directory: web/app
+        run: bun run test
+
+      - name: Install Playwright browser
+        working-directory: web/app
+        run: bunx playwright install --with-deps chromium
+
+      - name: Playwright smoke
+        working-directory: web/app
+        run: bun run test:smoke
+
+      - name: Build
+        working-directory: web/app
+        run: bun run build

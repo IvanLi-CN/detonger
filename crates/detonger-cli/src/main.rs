@@ -287,7 +287,7 @@ async fn cmd_preview_width_test(format: OutputFormat, args: PreviewWidthTestArgs
     let png =
         match detonger_printer::protocol::encode::render_width_test_png(&caps, &opts, args.scale) {
             Ok(v) => v,
-            Err(e) => return emit_print_error(format, AppError::from_printer_error(e)),
+            Err(e) => return emit_print_error(format, AppError::from_printer_error(e.into())),
         };
 
     if let Err(e) = std::fs::write(&args.out, &png) {

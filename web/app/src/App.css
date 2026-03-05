@@ -1,0 +1,147 @@
+:root {
+  color: #ecf2ff;
+  background: radial-gradient(circle at top right, #11306e 0%, #0a1226 45%, #04070f 100%);
+  font-family: "Fira Sans", "PingFang SC", "Noto Sans CJK SC", sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+}
+
+.page {
+  width: min(980px, 94vw);
+  margin: 24px auto 40px;
+  display: grid;
+  gap: 16px;
+}
+
+.card {
+  border: 1px solid rgba(173, 194, 255, 0.28);
+  border-radius: 14px;
+  background: rgba(7, 17, 40, 0.85);
+  box-shadow: 0 12px 24px rgba(0, 0, 0, 0.34);
+  padding: 16px;
+}
+
+h1,
+h2 {
+  margin: 0 0 8px;
+}
+
+p {
+  margin: 0 0 12px;
+  color: #bfd4ff;
+}
+
+.row {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+label {
+  display: grid;
+  gap: 6px;
+  font-size: 14px;
+}
+
+input,
+textarea,
+button {
+  border-radius: 10px;
+  border: 1px solid rgba(170, 190, 255, 0.35);
+  background: rgba(12, 25, 56, 0.8);
+  color: inherit;
+  padding: 9px 12px;
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+button:not(:disabled):hover {
+  border-color: #8fb6ff;
+  transform: translateY(-1px);
+}
+
+textarea {
+  width: 100%;
+  resize: vertical;
+}
+
+.status {
+  display: inline-block;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-size: 12px;
+  margin-left: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+}
+
+.status-idle {
+  color: #a5bbff;
+  border-color: #4b67b8;
+}
+
+.status-requesting,
+.status-printing {
+  color: #ffdc83;
+  border-color: #a5772c;
+}
+
+.status-connected {
+  color: #7bf0b4;
+  border-color: #2e9464;
+}
+
+.status-error {
+  color: #ff9da4;
+  border-color: #a44b54;
+}
+
+.log-list {
+  margin: 0;
+  padding-left: 20px;
+  display: grid;
+  gap: 6px;
+  max-height: 260px;
+  overflow: auto;
+}
+
+.log-info {
+  color: #c6ddff;
+}
+
+.log-error {
+  color: #ffb9be;
+}
+
+@media (max-width: 600px) {
+  .page {
+    margin-top: 14px;
+  }
+
+  .card {
+    padding: 14px;
+  }
+}

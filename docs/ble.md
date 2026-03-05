@@ -7,6 +7,7 @@ target label printer.
 
 - Target device: DeTong / Detonger P2 (macOS-first)
 - Transport: BLE GATT write to a vendor service/characteristic
+- Web MVP: Chrome desktop Web Bluetooth (secure context required)
 
 ## GATT UUIDs
 
@@ -58,3 +59,8 @@ Common failure modes:
 - `timeout`: the OS or the printer didn't complete scan/connect/discovery within the timeout.
 - `not found`: the target service/characteristic wasn't discovered (printer firmware or a transient BLE issue).
 
+## Web Bluetooth notes
+
+- Use Chrome desktop. Safari/Firefox are out of scope for this MVP.
+- The page must run in a secure context: `https://` or `http://localhost`.
+- `requestDevice()` requires user gesture; browser permission prompts are expected.
