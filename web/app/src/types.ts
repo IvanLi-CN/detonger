@@ -5,10 +5,13 @@ export type PrinterSessionState =
   | "printing"
   | "error";
 
+export type PaperType = "continuous" | "gap";
+
 export interface EncodeOptions {
   threshold: number;
   xOffsetDots: number;
   printWidthDots: number;
+  paperType: PaperType;
 }
 
 export type PrintErrorCode =

@@ -57,6 +57,7 @@ label {
 }
 
 input,
+select,
 textarea,
 button {
   border-radius: 10px;

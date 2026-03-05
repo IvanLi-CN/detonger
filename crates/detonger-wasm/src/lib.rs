@@ -1,7 +1,23 @@
-use detonger_protocol::{PrintOptions, PrinterCaps};
+use detonger_protocol::{PaperType, PrintOptions, PrinterCaps};
 use js_sys::{Array, Uint8Array};
 use serde::Deserialize;
 use wasm_bindgen::prelude::*;
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum PaperTypeInput {
+    Continuous,
+    Gap,
+}
+
+impl PaperTypeInput {
+    fn to_protocol(&self) -> PaperType {
+        match self {
+            Self::Continuous => PaperType::Continuous,
+            Self::Gap => PaperType::Gap,
+        }
+    }
+}
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -9,6 +25,7 @@ struct EncodeOptionsInput {
     threshold: Option<u8>,
     x_offset_dots: Option<i16>,
     print_width_dots: Option<u16>,
+    paper_type: Option<PaperTypeInput>,
 }
 
 impl EncodeOptionsInput {
@@ -24,6 +41,11 @@ impl EncodeOptionsInput {
             x_offset_dots: self
                 .x_offset_dots
                 .unwrap_or(PrintOptions::default().x_offset_dots),
+            paper_type: self
+                .paper_type
+                .as_ref()
+                .map(PaperTypeInput::to_protocol)
+                .unwrap_or(PrintOptions::default().paper_type),
         };
         (caps, opts)
     }

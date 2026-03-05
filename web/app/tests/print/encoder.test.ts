@@ -24,6 +24,7 @@ const options = {
   threshold: 150,
   xOffsetDots: 0,
   printWidthDots: 384,
+  paperType: "gap",
 };
 
 describe("encoder boundary", () => {

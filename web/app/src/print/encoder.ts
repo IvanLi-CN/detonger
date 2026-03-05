@@ -49,10 +49,12 @@ function toWasmOptions(options: EncodeOptions): {
   threshold: number;
   xOffsetDots: number;
   printWidthDots: number;
+  paperType: "continuous" | "gap";
 } {
   return {
     threshold: options.threshold,
     xOffsetDots: options.xOffsetDots,
     printWidthDots: options.printWidthDots,
+    paperType: options.paperType,
   };
 }

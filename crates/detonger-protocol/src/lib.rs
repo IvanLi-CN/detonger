@@ -52,6 +52,8 @@ pub struct PrintOptions {
     pub threshold: u8,
     /// Horizontal offset in printhead dots. Negative shifts left (may crop).
     pub x_offset_dots: i16,
+    /// Paper feed mode for gap detection.
+    pub paper_type: PaperType,
 }
 
 impl Default for PrintOptions {
@@ -59,6 +61,15 @@ impl Default for PrintOptions {
         Self {
             threshold: 150,
             x_offset_dots: 0,
+            paper_type: PaperType::Gap,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum PaperType {
+    Continuous,
+    #[default]
+    Gap,
 }

@@ -280,8 +280,8 @@ async fn cmd_preview_width_test(format: OutputFormat, args: PreviewWidthTestArgs
     };
 
     let opts = PrintOptions {
-        threshold: PrintOptions::default().threshold,
         x_offset_dots: args.x_offset,
+        ..PrintOptions::default()
     };
 
     let png =
@@ -330,6 +330,7 @@ async fn cmd_print_png(format: OutputFormat, args: PrintPngArgs) -> ExitCode {
     let opts = PrintOptions {
         threshold: args.threshold,
         x_offset_dots: args.x_offset,
+        ..PrintOptions::default()
     };
 
     if let Err(e) = conn.print_png(&png, &opts).await {
@@ -358,8 +359,8 @@ async fn cmd_print_width_test(format: OutputFormat, args: PrintWidthTestArgs) ->
     };
 
     let opts = PrintOptions {
-        threshold: PrintOptions::default().threshold,
         x_offset_dots: args.x_offset,
+        ..PrintOptions::default()
     };
 
     if let Err(e) = conn.print_width_test(&caps, &opts).await {

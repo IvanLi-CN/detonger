@@ -4,12 +4,13 @@ import { createPrinterClient, shouldUseMockBle } from "./ble/factory";
 import { toUserMessage } from "./ble/errors";
 import { encodePngMessages, encodeWidthTestMessagesForPreview, getProtocolVersion } from "./print/encoder";
 import { renderTextToPngBytes } from "./print/text-to-png";
-import type { EncodeOptions, PrinterSessionState, WebBlePrinterClient } from "./types";
+import type { EncodeOptions, PaperType, PrinterSessionState, WebBlePrinterClient } from "./types";
 
 const DEFAULT_OPTIONS: EncodeOptions = {
   threshold: 150,
   xOffsetDots: 0,
   printWidthDots: 384,
+  paperType: "gap",
 };
 
 type LogLevel = "info" | "error";
@@ -28,6 +29,14 @@ function createLog(level: LogLevel, message: string): LogEntry {
     message,
     time: new Date().toLocaleTimeString(),
   };
+}
+
+function paperTypeLabel(paperType: PaperType): string {
+  return paperType === "continuous" ? "连续纸" : "间隔纸";
+}
+
+function paperTypeProtocolValue(paperType: PaperType): string {
+  return paperType === "continuous" ? "0x00" : "0x02";
 }
 
 function App() {
@@ -103,7 +112,10 @@ function App() {
     }
 
     setSessionState("printing");
-    appendLog("info", "开始文本转图并发送打印数据...");
+    appendLog(
+      "info",
+      `开始文本转图并发送打印数据（纸型：${paperTypeLabel(options.paperType)}，gapType=${paperTypeProtocolValue(options.paperType)}）。`,
+    );
 
     try {
       const pngBytes = await renderTextToPngBytes(textInput, options.printWidthDots);
@@ -128,7 +140,10 @@ function App() {
     }
 
     setSessionState("printing");
-    appendLog("info", `开始打印 PNG：${selectedFile.name}`);
+    appendLog(
+      "info",
+      `开始打印 PNG：${selectedFile.name}（纸型：${paperTypeLabel(options.paperType)}，gapType=${paperTypeProtocolValue(options.paperType)}）。`,
+    );
 
     try {
       const messages = mockMode
@@ -152,7 +167,10 @@ function App() {
       return;
     }
     setSessionState("printing");
-    appendLog("info", "开始发送 width-test 测试图...");
+    appendLog(
+      "info",
+      `开始发送 width-test 测试图（纸型：${paperTypeLabel(options.paperType)}，gapType=${paperTypeProtocolValue(options.paperType)}）。`,
+    );
     try {
       const messages = await encodeWidthTestMessagesForPreview(options);
       await client.printMessages(messages);
@@ -237,6 +255,22 @@ function App() {
                 }))
               }
             />
+          </label>
+          <label>
+            纸型
+            <select
+              data-testid="paper-type-select"
+              value={options.paperType}
+              onChange={(event) =>
+                setOptions((prev) => ({
+                  ...prev,
+                  paperType: event.target.value as PaperType,
+                }))
+              }
+            >
+              <option value="gap">间隔纸 (Gap)</option>
+              <option value="continuous">连续纸 (Continuous)</option>
+            </select>
           </label>
         </div>
       </section>

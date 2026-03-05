@@ -1,4 +1,4 @@
-use crate::{Error, PrintOptions, PrinterCaps, Result};
+use crate::{Error, PaperType, PrintOptions, PrinterCaps, Result};
 
 use super::split::split_vendor_messages;
 
@@ -37,7 +37,7 @@ pub fn encode_png_job_messages(
     opts: &PrintOptions,
 ) -> Result<Vec<Vec<u8>>> {
     let rows = rasterize_png_to_rows(png, caps, opts)?;
-    encode_bitmap_job_messages(&rows, caps, 1, FinalizeMode::default())
+    encode_bitmap_job_messages(&rows, caps, opts, 1, FinalizeMode::default())
 }
 
 /// Generate a low-power width/alignment test pattern and encode it into vendor messages.
@@ -46,7 +46,7 @@ pub fn encode_width_test_job_messages(
     opts: &PrintOptions,
 ) -> Result<Vec<Vec<u8>>> {
     let rows = generate_width_test_rows(caps, opts)?;
-    encode_bitmap_job_messages(&rows, caps, 1, FinalizeMode::default())
+    encode_bitmap_job_messages(&rows, caps, opts, 1, FinalizeMode::default())
 }
 
 /// Render the width-test pattern as a PNG (useful to preview what `print width-test` draws).
@@ -71,10 +71,11 @@ pub fn render_width_test_png(
 pub fn encode_bitmap_job_messages(
     rows: &[Vec<u8>],
     caps: &PrinterCaps,
+    opts: &PrintOptions,
     page_key: u16,
     finalize: FinalizeMode,
 ) -> Result<Vec<Vec<u8>>> {
-    let payload = encode_bitmap_job_payload(rows, caps, page_key, finalize)?;
+    let payload = encode_bitmap_job_payload(rows, caps, opts, page_key, finalize)?;
     split_vendor_messages(&payload)
 }
 
@@ -84,6 +85,7 @@ pub fn encode_bitmap_job_messages(
 pub fn encode_bitmap_job_payload(
     rows: &[Vec<u8>],
     caps: &PrinterCaps,
+    opts: &PrintOptions,
     page_key: u16,
     finalize: FinalizeMode,
 ) -> Result<Vec<u8>> {
@@ -99,7 +101,7 @@ pub fn encode_bitmap_job_payload(
     }
 
     let mut out: Vec<u8> = Vec::new();
-    out.extend_from_slice(&encode_header_payload(caps, page_key)?);
+    out.extend_from_slice(&encode_header_payload(caps, opts, page_key)?);
 
     for row in rows {
         out.extend_from_slice(&encode_bitmap_row(row)?);
@@ -118,7 +120,11 @@ pub fn encode_bitmap_job_payload(
     Ok(out)
 }
 
-fn encode_header_payload(caps: &PrinterCaps, page_key: u16) -> Result<Vec<u8>> {
+fn encode_header_payload(
+    caps: &PrinterCaps,
+    opts: &PrintOptions,
+    page_key: u16,
+) -> Result<Vec<u8>> {
     let byte_width = byte_width(caps.print_width_dots)?;
     let byte_width_u8: u8 = byte_width
         .try_into()
@@ -132,11 +138,16 @@ fn encode_header_payload(caps: &PrinterCaps, page_key: u16) -> Result<Vec<u8>> {
     // CMD_PAGE_WIDTH: byte width (dots/8)
     out.extend_from_slice(&encode_dzpkg(CMD_PAGE_WIDTH, &[byte_width_u8])?);
 
-    // CMD_GAP_TYPE: 02
-    out.extend_from_slice(&encode_dzpkg(CMD_GAP_TYPE, &[0x02])?);
+    let (gap_type, gap_len) = match opts.paper_type {
+        PaperType::Continuous => (0x00, [0x00, 0x00]),
+        PaperType::Gap => (0x02, [0xff, 0xff]),
+    };
 
-    // CMD_GAP_LEN: ff ff
-    out.extend_from_slice(&encode_dzpkg(CMD_GAP_LEN, &[0xff, 0xff])?);
+    // CMD_GAP_TYPE: paper detection mode.
+    out.extend_from_slice(&encode_dzpkg(CMD_GAP_TYPE, &[gap_type])?);
+
+    // CMD_GAP_LEN: keep legacy max value for gap paper; use 0 for continuous mode.
+    out.extend_from_slice(&encode_dzpkg(CMD_GAP_LEN, &gap_len)?);
 
     // CMD_DARKNESS: 08
     out.extend_from_slice(&encode_dzpkg(CMD_DARKNESS, &[0x08])?);
@@ -409,6 +420,48 @@ mod tests {
                 .iter()
                 .any(|m| m.starts_with(&[0x1f, CMD_PAGE_PRINT]))
         );
+        Ok(())
+    }
+
+    #[test]
+    fn header_gap_commands_follow_paper_type() -> Result<()> {
+        let caps = PrinterCaps::default();
+        let row = vec![0u8; byte_width(caps.print_width_dots)?];
+
+        let gap_opts = PrintOptions {
+            paper_type: PaperType::Gap,
+            ..PrintOptions::default()
+        };
+        let gap_msgs = encode_bitmap_job_messages(
+            std::slice::from_ref(&row),
+            &caps,
+            &gap_opts,
+            1,
+            FinalizeMode::default(),
+        )?;
+        assert_eq!(gap_msgs[2], vec![0x1f, CMD_GAP_TYPE, 0x01, 0x02, 0x88]);
+        assert_eq!(gap_msgs[3], vec![0x1f, CMD_GAP_LEN, 0x02, 0xff, 0xff, 0x88]);
+
+        let continuous_opts = PrintOptions {
+            paper_type: PaperType::Continuous,
+            ..PrintOptions::default()
+        };
+        let continuous_msgs = encode_bitmap_job_messages(
+            std::slice::from_ref(&row),
+            &caps,
+            &continuous_opts,
+            1,
+            FinalizeMode::default(),
+        )?;
+        assert_eq!(
+            continuous_msgs[2],
+            vec![0x1f, CMD_GAP_TYPE, 0x01, 0x00, 0x88]
+        );
+        assert_eq!(
+            continuous_msgs[3],
+            vec![0x1f, CMD_GAP_LEN, 0x02, 0x00, 0x00, 0x88]
+        );
+
         Ok(())
     }
 
