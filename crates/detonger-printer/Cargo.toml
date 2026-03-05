@@ -6,8 +6,8 @@ rust-version.workspace = true
 
 [dependencies]
 bluest.workspace = true
+detonger-protocol = { path = "../detonger-protocol" }
 futures.workspace = true
-image.workspace = true
 objc2.workspace = true
 serde.workspace = true
 thiserror.workspace = true

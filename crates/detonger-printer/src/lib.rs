@@ -9,8 +9,9 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
 mod ble;
-pub mod protocol;
 mod uuid;
+pub use detonger_protocol as protocol;
+pub use detonger_protocol::{PrintOptions, PrinterCaps};
 
 pub type Result<T> = std::result::Result<T, Error>;
 
@@ -55,44 +56,23 @@ pub struct DiscoveredDevice {
     pub rssi: Option<i16>,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-pub struct PrinterCaps {
-    pub dpi: u16,
-    pub print_width_dots: u16,
-}
-
-impl Default for PrinterCaps {
-    fn default() -> Self {
-        Self {
-            dpi: 203,
-            print_width_dots: 384,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-pub struct PrintOptions {
-    /// Threshold in `[0,255]`. Lower values make the output lighter.
-    pub threshold: u8,
-    /// Horizontal offset in printhead dots. Negative shifts left (may crop).
-    pub x_offset_dots: i16,
-}
-
-impl Default for PrintOptions {
-    fn default() -> Self {
-        Self {
-            threshold: 150,
-            x_offset_dots: 0,
-        }
-    }
-}
-
 pub struct PrinterConnection {
     inner: ble::BlePrinterConnection,
 }
 
 pub async fn scan(timeout: Duration) -> Result<Vec<DiscoveredDevice>> {
     ble::scan(timeout).await
+}
+
+impl From<detonger_protocol::Error> for Error {
+    fn from(value: detonger_protocol::Error) -> Self {
+        match value {
+            detonger_protocol::Error::InvalidArgument(msg) => Self::InvalidArgument(msg),
+            detonger_protocol::Error::Protocol(msg) => Self::Protocol(msg),
+            detonger_protocol::Error::Image(msg) => Self::Image(msg),
+            detonger_protocol::Error::Io(err) => Self::Io(err),
+        }
+    }
 }
 
 pub async fn connect(device: &DeviceId) -> Result<PrinterConnection> {
