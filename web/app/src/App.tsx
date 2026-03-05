@@ -75,9 +75,10 @@ function App() {
     appendLog("info", "正在请求蓝牙权限并连接设备...");
 
     try {
-      await client.requestAndConnect();
+      const device = await client.requestAndConnect();
       setSessionState("connected");
-      appendLog("info", "连接成功，可开始打印。");
+      const deviceLabel = device.name ? `${device.name} (${device.id})` : device.id;
+      appendLog("info", `连接成功，可开始打印。已选设备：${deviceLabel}`);
     } catch (error) {
       setSessionState("error");
       appendLog("error", toUserMessage(error));

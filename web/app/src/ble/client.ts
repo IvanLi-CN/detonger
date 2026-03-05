@@ -1,6 +1,6 @@
 import { PRINTER_SERVICE_UUID, PRINTER_WRITE_CHARACTERISTIC_UUID } from "./constants";
 import { createPrintError, isPrintError } from "./errors";
-import type { WebBlePrinterClient } from "../types";
+import type { ConnectedPrinterInfo, WebBlePrinterClient } from "../types";
 
 const WRITE_DELAY_MS = 5;
 
@@ -9,7 +9,7 @@ export class BrowserWebBlePrinterClient implements WebBlePrinterClient {
   private characteristic: BluetoothRemoteGATTCharacteristic | undefined;
   private onDisconnect: (() => void) | undefined;
 
-  async requestAndConnect(): Promise<void> {
+  async requestAndConnect(): Promise<ConnectedPrinterInfo> {
     if (!isWebBluetoothSupported()) {
       throw createPrintError(
         "unsupported",
@@ -18,7 +18,7 @@ export class BrowserWebBlePrinterClient implements WebBlePrinterClient {
     }
 
     if (this.characteristic && this.device?.gatt?.connected) {
-      return;
+      return this.describeDevice(this.device);
     }
 
     let device: BluetoothDevice;
@@ -38,18 +38,22 @@ export class BrowserWebBlePrinterClient implements WebBlePrinterClient {
     this.characteristic = undefined;
 
     device.addEventListener("gattserverdisconnected", this.handleDisconnected);
+    const selectedDeviceLabel = this.formatDeviceLabel(device);
 
     try {
       const server = await device.gatt?.connect();
       if (!server) {
-        throw createPrintError("device_not_found", "设备未建立 GATT 连接。请重试。");
+        throw createPrintError(
+          "device_not_found",
+          `设备未建立 GATT 连接。请重试。已选设备：${selectedDeviceLabel}`,
+        );
       }
 
       const service = await server.getPrimaryService(PRINTER_SERVICE_UUID).catch(() => undefined);
       if (!service) {
         throw createPrintError(
           "service_not_found",
-          `未找到目标服务 UUID: ${PRINTER_SERVICE_UUID}`,
+          `未找到目标服务 UUID: ${PRINTER_SERVICE_UUID}。已选设备：${selectedDeviceLabel}`,
         );
       }
 
@@ -59,12 +63,13 @@ export class BrowserWebBlePrinterClient implements WebBlePrinterClient {
       if (!characteristic) {
         throw createPrintError(
           "char_not_found",
-          `未找到写入特征 UUID: ${PRINTER_WRITE_CHARACTERISTIC_UUID}`,
+          `未找到写入特征 UUID: ${PRINTER_WRITE_CHARACTERISTIC_UUID}。已选设备：${selectedDeviceLabel}`,
         );
       }
 
       this.device = device;
       this.characteristic = characteristic;
+      return this.describeDevice(device);
     } catch (error) {
       this.detachDevice(device);
       this.device = undefined;
@@ -74,7 +79,7 @@ export class BrowserWebBlePrinterClient implements WebBlePrinterClient {
       }
       throw createPrintError(
         "device_not_found",
-        `连接打印机失败：${error instanceof Error ? error.message : String(error)}`,
+        `连接打印机失败：${error instanceof Error ? error.message : String(error)}。已选设备：${selectedDeviceLabel}`,
       );
     }
   }
@@ -139,6 +144,20 @@ export class BrowserWebBlePrinterClient implements WebBlePrinterClient {
       }
     }
     device.removeEventListener("gattserverdisconnected", this.handleDisconnected);
+  }
+
+  private describeDevice(device: BluetoothDevice): ConnectedPrinterInfo {
+    return {
+      id: device.id,
+      name: device.name ?? undefined,
+    };
+  }
+
+  private formatDeviceLabel(device: BluetoothDevice): string {
+    if (device.name && device.name.length > 0) {
+      return `${device.name} (${device.id})`;
+    }
+    return device.id;
   }
 }
 

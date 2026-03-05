@@ -24,8 +24,13 @@ export interface PrintError extends Error {
   code: PrintErrorCode;
 }
 
+export interface ConnectedPrinterInfo {
+  id: string;
+  name?: string;
+}
+
 export interface WebBlePrinterClient {
-  requestAndConnect(): Promise<void>;
+  requestAndConnect(): Promise<ConnectedPrinterInfo>;
   printMessages(messages: Uint8Array[]): Promise<void>;
   disconnect(): void;
   isConnected(): boolean;

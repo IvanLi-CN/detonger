@@ -1,12 +1,13 @@
-import type { WebBlePrinterClient } from "../types";
+import type { ConnectedPrinterInfo, WebBlePrinterClient } from "../types";
 import { createPrintError } from "./errors";
 
 export class MockWebBlePrinterClient implements WebBlePrinterClient {
   private connected = false;
   private onDisconnect: (() => void) | undefined;
 
-  async requestAndConnect(): Promise<void> {
+  async requestAndConnect(): Promise<ConnectedPrinterInfo> {
     this.connected = true;
+    return { id: "mock-ble-device", name: "Mock Detonger P2" };
   }
 
   async printMessages(messages: Uint8Array[]): Promise<void> {
