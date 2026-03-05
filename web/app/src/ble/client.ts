@@ -1,5 +1,5 @@
 import { PRINTER_SERVICE_UUID, PRINTER_WRITE_CHARACTERISTIC_UUID } from "./constants";
-import { createPrintError } from "./errors";
+import { createPrintError, isPrintError } from "./errors";
 import type { WebBlePrinterClient } from "../types";
 
 const WRITE_DELAY_MS = 5;
@@ -34,33 +34,49 @@ export class BrowserWebBlePrinterClient implements WebBlePrinterClient {
       );
     }
 
-    this.device = device;
-    this.device.addEventListener("gattserverdisconnected", this.handleDisconnected);
+    this.detachDevice(this.device);
+    this.characteristic = undefined;
 
-    const server = await device.gatt?.connect();
-    if (!server) {
-      throw createPrintError("device_not_found", "设备未建立 GATT 连接。请重试。");
-    }
+    device.addEventListener("gattserverdisconnected", this.handleDisconnected);
 
-    const service = await server.getPrimaryService(PRINTER_SERVICE_UUID).catch(() => undefined);
-    if (!service) {
+    try {
+      const server = await device.gatt?.connect();
+      if (!server) {
+        throw createPrintError("device_not_found", "设备未建立 GATT 连接。请重试。");
+      }
+
+      const service = await server.getPrimaryService(PRINTER_SERVICE_UUID).catch(() => undefined);
+      if (!service) {
+        throw createPrintError(
+          "service_not_found",
+          `未找到目标服务 UUID: ${PRINTER_SERVICE_UUID}`,
+        );
+      }
+
+      const characteristic = await service
+        .getCharacteristic(PRINTER_WRITE_CHARACTERISTIC_UUID)
+        .catch(() => undefined);
+      if (!characteristic) {
+        throw createPrintError(
+          "char_not_found",
+          `未找到写入特征 UUID: ${PRINTER_WRITE_CHARACTERISTIC_UUID}`,
+        );
+      }
+
+      this.device = device;
+      this.characteristic = characteristic;
+    } catch (error) {
+      this.detachDevice(device);
+      this.device = undefined;
+      this.characteristic = undefined;
+      if (isPrintError(error)) {
+        throw error;
+      }
       throw createPrintError(
-        "service_not_found",
-        `未找到目标服务 UUID: ${PRINTER_SERVICE_UUID}`,
+        "device_not_found",
+        `连接打印机失败：${error instanceof Error ? error.message : String(error)}`,
       );
     }
-
-    const characteristic = await service
-      .getCharacteristic(PRINTER_WRITE_CHARACTERISTIC_UUID)
-      .catch(() => undefined);
-    if (!characteristic) {
-      throw createPrintError(
-        "char_not_found",
-        `未找到写入特征 UUID: ${PRINTER_WRITE_CHARACTERISTIC_UUID}`,
-      );
-    }
-
-    this.characteristic = characteristic;
   }
 
   async printMessages(messages: Uint8Array[]): Promise<void> {
@@ -90,9 +106,7 @@ export class BrowserWebBlePrinterClient implements WebBlePrinterClient {
   }
 
   disconnect(): void {
-    if (this.device?.gatt?.connected) {
-      this.device.gatt.disconnect();
-    }
+    this.detachDevice(this.device, true);
     this.characteristic = undefined;
   }
 
@@ -105,9 +119,27 @@ export class BrowserWebBlePrinterClient implements WebBlePrinterClient {
   }
 
   private readonly handleDisconnected = () => {
+    this.detachDevice(this.device);
+    this.device = undefined;
     this.characteristic = undefined;
     this.onDisconnect?.();
   };
+
+  private detachDevice(
+    device: BluetoothDevice | undefined,
+    waitForDisconnectEvent = false,
+  ): void {
+    if (!device) {
+      return;
+    }
+    if (device.gatt?.connected) {
+      device.gatt.disconnect();
+      if (waitForDisconnectEvent) {
+        return;
+      }
+    }
+    device.removeEventListener("gattserverdisconnected", this.handleDisconnected);
+  }
 }
 
 export function isWebBluetoothSupported(): boolean {

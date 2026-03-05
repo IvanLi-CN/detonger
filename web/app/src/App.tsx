@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import "./App.css";
 import { createPrinterClient, shouldUseMockBle } from "./ble/factory";
 import { toUserMessage } from "./ble/errors";
@@ -39,6 +39,7 @@ function App() {
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [protocolVer, setProtocolVer] = useState<string>("loading...");
   const mockMode = shouldUseMockBle();
+  const manualDisconnectRef = useRef(false);
 
   const appendLog = useCallback((level: LogLevel, message: string): void => {
     setLogs((prev) => [createLog(level, message), ...prev].slice(0, 60));
@@ -47,6 +48,11 @@ function App() {
   useEffect(() => {
     client.setDisconnectHandler(() => {
       setSessionState("idle");
+      if (manualDisconnectRef.current) {
+        manualDisconnectRef.current = false;
+        appendLog("info", "已主动断开连接。");
+        return;
+      }
       appendLog("error", "打印机连接已断开，请重新连接。");
     });
 
@@ -79,9 +85,13 @@ function App() {
   }
 
   function handleDisconnect(): void {
+    if (!client.isConnected()) {
+      appendLog("info", "当前没有活动连接。");
+      return;
+    }
+    manualDisconnectRef.current = true;
     client.disconnect();
     setSessionState("idle");
-    appendLog("info", "已主动断开连接。");
   }
 
   async function handlePrintText(): Promise<void> {
