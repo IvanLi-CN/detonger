@@ -2,7 +2,7 @@
 
 ## 状态
 
-- Status: 部分完成（6/7）
+- Status: 已完成
 - Created: 2026-03-05
 - Last: 2026-03-05
 
@@ -154,7 +154,7 @@ None
 - [x] M4: 搭建 `web/app` 并实现 Web Bluetooth 打印核心链路
 - [x] M5: 增补测试与 CI（Rust + Web + Playwright smoke）
 - [x] M6: 完成文档同步与本地验收
-- [ ] M7: 远端 PR + checks + review-loop 收敛
+- [x] M7: 远端 PR + checks + review-loop 收敛
 
 ## 方案概述（Approach, high-level）
 
@@ -172,6 +172,7 @@ None
 
 - 2026-03-05: 创建规格并冻结实现边界（Rust->Wasm + React/Vite + Bun + Vitest/Playwright smoke）。
 - 2026-03-05: 完成 M1-M6，进入快车道远端收敛阶段（M7）。
+- 2026-03-05: 完成 M7，PR `#1` 在最新提交 `80774ac` 上 checks 全绿，review-loop 收敛无阻塞项。
 
 ## 参考（References）
 
