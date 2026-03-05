@@ -1,15 +1,16 @@
 import { PRINTER_SERVICE_UUID, PRINTER_WRITE_CHARACTERISTIC_UUID } from "./constants";
 import { createPrintError, isPrintError } from "./errors";
-import type { ConnectedPrinterInfo, WebBlePrinterClient } from "../types";
+import type { ConnectedPrinterInfo, ConnectPrinterOptions, WebBlePrinterClient } from "../types";
 
 const WRITE_DELAY_MS = 5;
+const FILTERED_NAME_PREFIXES = ["P2", "Detonger"] as const;
 
 export class BrowserWebBlePrinterClient implements WebBlePrinterClient {
   private device: BluetoothDevice | undefined;
   private characteristic: BluetoothRemoteGATTCharacteristic | undefined;
   private onDisconnect: (() => void) | undefined;
 
-  async requestAndConnect(): Promise<ConnectedPrinterInfo> {
+  async requestAndConnect(options?: ConnectPrinterOptions): Promise<ConnectedPrinterInfo> {
     if (!isWebBluetoothSupported()) {
       throw createPrintError(
         "unsupported",
@@ -23,10 +24,7 @@ export class BrowserWebBlePrinterClient implements WebBlePrinterClient {
 
     let device: BluetoothDevice;
     try {
-      device = await navigator.bluetooth.requestDevice({
-        acceptAllDevices: true,
-        optionalServices: [PRINTER_SERVICE_UUID],
-      });
+      device = await navigator.bluetooth.requestDevice(getRequestDeviceOptionsForConnect(options));
     } catch (error) {
       throw createPrintError(
         "permission_denied",
@@ -167,4 +165,19 @@ export function isWebBluetoothSupported(): boolean {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export function getRequestDeviceOptionsForConnect(
+  options?: ConnectPrinterOptions,
+): RequestDeviceOptions {
+  if (options?.filterDetongerDevices === false) {
+    return {
+      acceptAllDevices: true,
+      optionalServices: [PRINTER_SERVICE_UUID],
+    };
+  }
+  return {
+    filters: FILTERED_NAME_PREFIXES.map((namePrefix) => ({ namePrefix })),
+    optionalServices: [PRINTER_SERVICE_UUID],
+  };
 }

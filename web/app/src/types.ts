@@ -32,8 +32,12 @@ export interface ConnectedPrinterInfo {
   name?: string;
 }
 
+export interface ConnectPrinterOptions {
+  filterDetongerDevices?: boolean;
+}
+
 export interface WebBlePrinterClient {
-  requestAndConnect(): Promise<ConnectedPrinterInfo>;
+  requestAndConnect(options?: ConnectPrinterOptions): Promise<ConnectedPrinterInfo>;
   printMessages(messages: Uint8Array[]): Promise<void>;
   disconnect(): void;
   isConnected(): boolean;

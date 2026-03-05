@@ -45,6 +45,7 @@ function App() {
   const [textInput, setTextInput] = useState("Detonger Web BLE\nHello from Chrome");
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [options, setOptions] = useState<EncodeOptions>(DEFAULT_OPTIONS);
+  const [filterDetongerDevices, setFilterDetongerDevices] = useState(true);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [protocolVer, setProtocolVer] = useState<string>("loading...");
   const mockMode = shouldUseMockBle();
@@ -81,10 +82,13 @@ function App() {
 
   async function handleConnect(): Promise<void> {
     setSessionState("requesting");
-    appendLog("info", "正在请求蓝牙权限并连接设备...");
+    appendLog(
+      "info",
+      `正在请求蓝牙权限并连接设备（设备筛选：${filterDetongerDevices ? "开启" : "关闭"}）...`,
+    );
 
     try {
-      const device = await client.requestAndConnect();
+      const device = await client.requestAndConnect({ filterDetongerDevices });
       setSessionState("connected");
       const deviceLabel = device.name ? `${device.name} (${device.id})` : device.id;
       appendLog("info", `连接成功，可开始打印。已选设备：${deviceLabel}`);
@@ -255,6 +259,16 @@ function App() {
                 }))
               }
             />
+          </label>
+          <label className="checkbox-label">
+            <span>连接时筛选设备</span>
+            <input
+              data-testid="filter-device-toggle"
+              type="checkbox"
+              checked={filterDetongerDevices}
+              onChange={(event) => setFilterDetongerDevices(event.target.checked)}
+            />
+            <small>仅显示名称前缀为 P2 / Detonger 的设备（推荐）</small>
           </label>
           <label>
             纸型

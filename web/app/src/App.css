@@ -56,6 +56,22 @@ label {
   font-size: 14px;
 }
 
+.checkbox-label {
+  align-content: start;
+}
+
+.checkbox-label > input[type="checkbox"] {
+  justify-self: start;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+}
+
+.checkbox-label > small {
+  color: #9fb7e6;
+  line-height: 1.35;
+}
+
 input,
 select,
 textarea,
