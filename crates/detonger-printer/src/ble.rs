@@ -10,7 +10,6 @@ use crate::uuid::{PRINTER_SERVICE_UUID, PRINTER_WRITE_CHARACTERISTIC_UUID};
 use crate::{DeviceId, DiscoveredDevice, Error, Result};
 
 const ADAPTER_TIMEOUT: Duration = Duration::from_secs(10);
-const SCAN_LOOKUP_TIMEOUT: Duration = Duration::from_secs(8);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 const DISCOVER_TIMEOUT: Duration = Duration::from_secs(60);
 const CONNECTED_POLL_TIMEOUT: Duration = Duration::from_secs(10);
@@ -46,15 +45,34 @@ impl BlePrinterConnection {
 
         Ok(())
     }
+
 }
 
 pub(crate) async fn scan(timeout: Duration) -> Result<Vec<DiscoveredDevice>> {
     let adapter = default_adapter().await?;
+    let mut seen: HashMap<String, DiscoveredDevice> = HashMap::new();
+
+    let connected = adapter
+        .connected_devices_with_services(&[PRINTER_SERVICE_UUID])
+        .await
+        .unwrap_or_default();
+
+    for device in connected {
+        let id = device.id().to_string();
+        let name = device.name_async().await.ok().filter(|value| !value.is_empty());
+        let rssi = device.rssi().await.ok();
+        seen.insert(
+            id.clone(),
+            DiscoveredDevice {
+                id: DeviceId(id),
+                name,
+                rssi,
+            },
+        );
+    }
 
     let mut scan = adapter.scan(&[]).await.map_err(map_bluest_error)?;
-
     let deadline = Instant::now() + timeout;
-    let mut seen: HashMap<String, DiscoveredDevice> = HashMap::new();
 
     while Instant::now() < deadline {
         let remaining = deadline.saturating_duration_since(Instant::now());
@@ -67,7 +85,15 @@ pub(crate) async fn scan(timeout: Duration) -> Result<Vec<DiscoveredDevice>> {
         };
 
         let id = adv.device.id().to_string();
-        let name = adv.adv_data.local_name;
+        let name = if adv.adv_data.local_name.is_some() {
+            adv.adv_data.local_name
+        } else {
+            adv.device
+                .name_async()
+                .await
+                .ok()
+                .filter(|value| !value.is_empty())
+        };
         let rssi = adv.rssi;
 
         seen.entry(id.clone())
@@ -88,19 +114,42 @@ pub(crate) async fn scan(timeout: Duration) -> Result<Vec<DiscoveredDevice>> {
     drop(scan);
 
     let mut out: Vec<DiscoveredDevice> = seen.into_values().collect();
-    out.sort_by(|a, b| a.id.0.cmp(&b.id.0));
+    out.sort_by(|a, b| {
+        b.rssi
+            .cmp(&a.rssi)
+            .then_with(|| a.id.0.cmp(&b.id.0))
+    });
     Ok(out)
 }
 
 pub(crate) async fn connect(device: &DeviceId) -> Result<BlePrinterConnection> {
     let adapter = default_adapter().await?;
-
     let debug = std::env::var_os("DETONGER_DEBUG").is_some();
+
+    let dev = match find_scanned_device_by_id(&adapter, device, Duration::from_secs(8)).await? {
+        Some(found) => found,
+        None => {
+            if debug {
+                eprintln!("[detonger] connect: scan lookup missed {}, fallback to open_device", device.0);
+            }
+            let device_id = serde_json::from_str::<bluest::DeviceId>(&format!("\"{}\"", device.0))
+                .map_err(|_| Error::InvalidArgument(format!("invalid device id: {}", device.0)))?;
+            adapter
+                .open_device(&device_id)
+                .await
+                .map_err(map_bluest_error)?
+        }
+    };
+
     if debug {
-        eprintln!("[detonger] connect: scanning for device id {}...", device.0);
+        eprintln!("[detonger] connect: target={}", dev.id());
     }
 
-    let dev = find_device_by_id(&adapter, &device.0, SCAN_LOOKUP_TIMEOUT).await?;
+    connect_on(adapter, dev).await
+}
+
+async fn connect_on(adapter: Adapter, dev: bluest::Device) -> Result<BlePrinterConnection> {
+    let debug = std::env::var_os("DETONGER_DEBUG").is_some();
 
     if debug {
         eprintln!("[detonger] connect: connecting...");
@@ -159,7 +208,7 @@ pub(crate) async fn connect(device: &DeviceId) -> Result<BlePrinterConnection> {
     let service = services.into_iter().next().ok_or_else(|| {
         Error::NotFound(format!(
             "service {PRINTER_SERVICE_UUID} not found on device {}",
-            device.0
+            dev.id()
         ))
     })?;
 
@@ -196,7 +245,7 @@ pub(crate) async fn connect(device: &DeviceId) -> Result<BlePrinterConnection> {
     let write_characteristic = chars.into_iter().next().ok_or_else(|| {
         Error::NotFound(format!(
             "write characteristic {PRINTER_WRITE_CHARACTERISTIC_UUID} not found on device {}",
-            device.0
+            dev.id()
         ))
     })?;
 
@@ -235,14 +284,15 @@ async fn default_adapter() -> Result<Adapter> {
     Ok(adapter)
 }
 
-async fn find_device_by_id(
+async fn find_scanned_device_by_id(
     adapter: &Adapter,
-    id_str: &str,
+    device: &DeviceId,
     timeout: Duration,
-) -> Result<bluest::Device> {
+) -> Result<Option<bluest::Device>> {
+    let debug = std::env::var_os("DETONGER_DEBUG").is_some();
     let mut scan = adapter.scan(&[]).await.map_err(map_bluest_error)?;
-
     let deadline = Instant::now() + timeout;
+
     while Instant::now() < deadline {
         let remaining = deadline.saturating_duration_since(Instant::now());
         let next = tokio::time::timeout(remaining, scan.next()).await;
@@ -252,23 +302,52 @@ async fn find_device_by_id(
             Err(_) => break,
         };
 
-        if adv.device.id().to_string() == id_str {
+        if adv.device.id().to_string() == device.0 {
+            if debug {
+                eprintln!("[detonger] connect: found target during scan {}", device.0);
+            }
             drop(scan);
-            return Ok(adv.device);
+            return Ok(Some(adv.device));
         }
     }
 
     drop(scan);
-    Err(Error::NotFound(format!("device {id_str} not found")))
+    Ok(None)
 }
 
 fn pick_write_mode(props: &CharacteristicProperties) -> Result<(bool, CharacteristicProperties)> {
-    if props.write_without_response {
-        return Ok((true, *props));
+    let preferred_mode = std::env::var("DETONGER_WRITE_MODE")
+        .ok()
+        .map(|value| value.trim().to_ascii_lowercase());
+
+    match preferred_mode.as_deref() {
+        Some("response") => {
+            if props.write {
+                return Ok((false, *props));
+            }
+            if props.write_without_response {
+                return Ok((true, *props));
+            }
+        }
+        Some("without-response") | Some("no-response") => {
+            if props.write_without_response {
+                return Ok((true, *props));
+            }
+            if props.write {
+                return Ok((false, *props));
+            }
+        }
+        Some(_) | None => {
+            // Legacy validated path preferred write-without-response with BLE pacing.
+            if props.write_without_response {
+                return Ok((true, *props));
+            }
+            if props.write {
+                return Ok((false, *props));
+            }
+        }
     }
-    if props.write {
-        return Ok((false, *props));
-    }
+
     Err(Error::NotFound(
         "write characteristic does not support write".to_string(),
     ))

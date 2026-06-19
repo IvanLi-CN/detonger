@@ -20,6 +20,7 @@ const CMD_PAGE_PRINT: u8 = 0x21;
 
 // Bitmap stream commands (not DzPackage, no trailing 0x88).
 const CMD_BITMAP_PRINT: u8 = 0x2B;
+const CMD_BITMAP_REPEAT: u8 = 0x2E;
 
 /// Optional job-finalization frames.
 ///
@@ -36,8 +37,68 @@ pub fn encode_png_job_messages(
     caps: &PrinterCaps,
     opts: &PrintOptions,
 ) -> Result<Vec<Vec<u8>>> {
+    encode_png_job_messages_with_finalize(png, caps, opts, FinalizeMode::default())
+}
+
+pub fn encode_png_job_messages_with_finalize(
+    png: &[u8],
+    caps: &PrinterCaps,
+    opts: &PrintOptions,
+    finalize: FinalizeMode,
+) -> Result<Vec<Vec<u8>>> {
     let rows = rasterize_png_to_rows(png, caps, opts)?;
-    encode_bitmap_job_messages(&rows, caps, opts, 1, FinalizeMode::default())
+    encode_bitmap_job_messages(&rows, caps, opts, 1, finalize)
+}
+
+pub fn encode_png_job_messages_in_chunks(
+    png: &[u8],
+    caps: &PrinterCaps,
+    opts: &PrintOptions,
+    max_rows_per_chunk: usize,
+    finalize_last: FinalizeMode,
+) -> Result<Vec<Vec<Vec<u8>>>> {
+    if max_rows_per_chunk == 0 {
+        return Err(Error::InvalidArgument(
+            "max_rows_per_chunk must be >= 1".into(),
+        ));
+    }
+
+    let rows = rasterize_png_to_rows(png, caps, opts)?;
+    if rows.is_empty() {
+        return Ok(vec![encode_bitmap_job_messages(
+            &rows,
+            caps,
+            opts,
+            1,
+            finalize_last,
+        )?]);
+    }
+
+    let chunk_count = rows.len().div_ceil(max_rows_per_chunk);
+    if chunk_count > (u16::MAX as usize) {
+        return Err(Error::InvalidArgument(format!(
+            "too many chunks for page key space: {chunk_count}"
+        )));
+    }
+
+    let mut jobs = Vec::with_capacity(chunk_count);
+    for (index, chunk) in rows.chunks(max_rows_per_chunk).enumerate() {
+        let page_key = (index as u16) + 1;
+        let finalize = if index + 1 == chunk_count {
+            finalize_last
+        } else {
+            FinalizeMode::default()
+        };
+        jobs.push(encode_bitmap_job_messages(
+            chunk,
+            caps,
+            opts,
+            page_key,
+            finalize,
+        )?);
+    }
+
+    Ok(jobs)
 }
 
 /// Generate a low-power width/alignment test pattern and encode it into vendor messages.
@@ -45,8 +106,16 @@ pub fn encode_width_test_job_messages(
     caps: &PrinterCaps,
     opts: &PrintOptions,
 ) -> Result<Vec<Vec<u8>>> {
+    encode_width_test_job_messages_with_finalize(caps, opts, FinalizeMode::default())
+}
+
+pub fn encode_width_test_job_messages_with_finalize(
+    caps: &PrinterCaps,
+    opts: &PrintOptions,
+    finalize: FinalizeMode,
+) -> Result<Vec<Vec<u8>>> {
     let rows = generate_width_test_rows(caps, opts)?;
-    encode_bitmap_job_messages(&rows, caps, opts, 1, FinalizeMode::default())
+    encode_bitmap_job_messages(&rows, caps, opts, 1, finalize)
 }
 
 /// Render the width-test pattern as a PNG (useful to preview what `print width-test` draws).
@@ -100,11 +169,38 @@ pub fn encode_bitmap_job_payload(
         }
     }
 
+    let rows = rows.to_vec();
+
     let mut out: Vec<u8> = Vec::new();
     out.extend_from_slice(&encode_header_payload(caps, opts, page_key)?);
 
-    for row in rows {
+    let row_count = rows.len();
+    let mut row_index = 0usize;
+
+    while row_index < row_count {
+        let row = &rows[row_index];
+        let mut run_len = 1usize;
+
+        while row_index + run_len < row_count && rows[row_index + run_len] == *row {
+            run_len += 1;
+        }
+
         out.extend_from_slice(&encode_bitmap_row(row)?);
+
+        let keep_last_row_explicit = row_index + run_len == row_count && run_len > 1;
+        let repeat_count = run_len - 1 - usize::from(keep_last_row_explicit);
+        let mut remaining = repeat_count;
+        while remaining > 0 {
+            let chunk = remaining.min(u8::MAX as usize) as u8;
+            out.extend_from_slice(&encode_bitmap_repeat(chunk));
+            remaining -= chunk as usize;
+        }
+
+        if keep_last_row_explicit {
+            out.extend_from_slice(&encode_bitmap_row(row)?);
+        }
+
+        row_index += run_len;
     }
 
     // The observed lpapi-ble stream appends a raw 0x0c after the bitmap stream.
@@ -201,6 +297,10 @@ fn encode_bitmap_row(row_bytes: &[u8]) -> Result<Vec<u8>> {
     out.push(len_lo);
     out.extend_from_slice(row_bytes);
     Ok(out)
+}
+
+fn encode_bitmap_repeat(repeat_count: u8) -> Vec<u8> {
+    vec![SYNC, CMD_BITMAP_REPEAT, repeat_count]
 }
 
 fn byte_width(print_width_dots: u16) -> Result<usize> {
@@ -420,6 +520,75 @@ mod tests {
                 .iter()
                 .any(|m| m.starts_with(&[0x1f, CMD_PAGE_PRINT]))
         );
+        Ok(())
+    }
+
+    #[test]
+    fn bitmap_job_compresses_repeated_rows() -> Result<()> {
+        let caps = PrinterCaps::default();
+        let byte_width = byte_width(caps.print_width_dots)?;
+        let row_a = vec![0xff; byte_width];
+        let row_b = vec![0x00; byte_width];
+        let row_c = vec![0x80; byte_width];
+        let rows = vec![
+            row_a.clone(),
+            row_a.clone(),
+            row_a,
+            row_b.clone(),
+            row_b,
+            row_c.clone(),
+            row_c.clone(),
+        ];
+
+        let messages = encode_bitmap_job_messages(
+            &rows,
+            &caps,
+            &PrintOptions::default(),
+            1,
+            FinalizeMode::default(),
+        )?;
+
+        let bitmap_msgs: Vec<&Vec<u8>> = messages
+            .iter()
+            .filter(|msg| msg.get(1) == Some(&CMD_BITMAP_PRINT) || msg.get(1) == Some(&CMD_BITMAP_REPEAT))
+            .collect();
+
+        assert_eq!(bitmap_msgs[0][0..4], [0x1f, CMD_BITMAP_PRINT, 0x00, 0x30]);
+        assert_eq!(bitmap_msgs[1], &vec![0x1f, CMD_BITMAP_REPEAT, 0x02]);
+        assert_eq!(bitmap_msgs[2][0..4], [0x1f, CMD_BITMAP_PRINT, 0x00, 0x30]);
+        assert_eq!(bitmap_msgs[3], &vec![0x1f, CMD_BITMAP_REPEAT, 0x01]);
+        assert_eq!(bitmap_msgs[4][0..4], [0x1f, CMD_BITMAP_PRINT, 0x00, 0x30]);
+        assert_eq!(bitmap_msgs[5][0..4], [0x1f, CMD_BITMAP_PRINT, 0x00, 0x30]);
+        assert_eq!(*bitmap_msgs.last().unwrap().last().unwrap(), 0x0c);
+
+        Ok(())
+    }
+
+    #[test]
+    fn png_jobs_can_be_chunked_into_multiple_pages() -> Result<()> {
+        let caps = PrinterCaps::default();
+        let width = caps.print_width_dots;
+        let rows = vec![
+            vec![0xff; byte_width(width)?],
+            vec![0x00; byte_width(width)?],
+            vec![0xaa; byte_width(width)?],
+            vec![0x55; byte_width(width)?],
+            vec![0xf0; byte_width(width)?],
+        ];
+        let png = render_rows_to_png(&rows, width, 1)?;
+        let jobs = encode_png_job_messages_in_chunks(
+            &png,
+            &caps,
+            &PrintOptions::default(),
+            2,
+            FinalizeMode::default(),
+        )?;
+
+        assert_eq!(jobs.len(), 3);
+        assert_eq!(jobs[0][0], vec![0x1f, CMD_PAGE_START, 0x02, 0x00, 0x01, 0x88]);
+        assert_eq!(jobs[1][0], vec![0x1f, CMD_PAGE_START, 0x02, 0x00, 0x02, 0x88]);
+        assert_eq!(jobs[2][0], vec![0x1f, CMD_PAGE_START, 0x02, 0x00, 0x03, 0x88]);
+
         Ok(())
     }
 

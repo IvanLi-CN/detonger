@@ -83,8 +83,38 @@ pub async fn connect(device: &DeviceId) -> Result<PrinterConnection> {
 impl PrinterConnection {
     pub async fn print_png(&mut self, png: &[u8], opts: &PrintOptions) -> Result<()> {
         let caps = PrinterCaps::default();
-        let messages = protocol::encode_png_job_messages(png, &caps, opts)?;
+        let messages = protocol::encode_png_job_messages_with_finalize(
+            png,
+            &caps,
+            opts,
+            protocol::FinalizeMode::default(),
+        )?;
         self.write_vendor_messages(&messages).await
+    }
+
+    pub async fn print_png_in_chunks(
+        &mut self,
+        png: &[u8],
+        opts: &PrintOptions,
+        max_rows_per_chunk: usize,
+    ) -> Result<()> {
+        let caps = PrinterCaps::default();
+        let jobs = protocol::encode_png_job_messages_in_chunks(
+            png,
+            &caps,
+            opts,
+            max_rows_per_chunk,
+            protocol::FinalizeMode::default(),
+        )?;
+        self.write_vendor_message_jobs(&jobs).await
+    }
+
+    pub async fn print_job_payload(&mut self, payload: &[u8]) -> Result<()> {
+        self.write_raw_payload(payload, 180).await
+    }
+
+    pub async fn print_vendor_messages(&mut self, messages: &[Vec<u8>]) -> Result<()> {
+        self.write_vendor_messages(messages).await
     }
 
     pub async fn print_width_test(
@@ -92,14 +122,48 @@ impl PrinterConnection {
         caps: &PrinterCaps,
         opts: &PrintOptions,
     ) -> Result<()> {
-        let messages = protocol::encode_width_test_job_messages(caps, opts)?;
+        let messages = protocol::encode_width_test_job_messages_with_finalize(
+            caps,
+            opts,
+            protocol::FinalizeMode::default(),
+        )?;
         self.write_vendor_messages(&messages).await
     }
 
+    async fn write_vendor_message_jobs(&mut self, jobs: &[Vec<Vec<u8>>]) -> Result<()> {
+        let debug = std::env::var_os("DETONGER_DEBUG").is_some();
+
+        if debug {
+            eprintln!("[detonger] write-jobs: start (jobs={})", jobs.len());
+        }
+
+        for (index, job) in jobs.iter().enumerate() {
+            if debug {
+                eprintln!(
+                    "[detonger] write-jobs: job {}/{} (messages={})",
+                    index + 1,
+                    jobs.len(),
+                    job.len()
+                );
+            }
+
+            self.write_vendor_messages(job).await?;
+        }
+
+        if debug {
+            eprintln!("[detonger] write-jobs: done");
+        }
+
+        Ok(())
+    }
+
     async fn write_vendor_messages(&mut self, messages: &[Vec<u8>]) -> Result<()> {
-        // Conservative pacing based on the legacy replay script. Some firmwares can
-        // drop the connection if messages are sent too fast.
-        let delay = Duration::from_millis(5);
+        // The P2 can drop the BLE link on larger jobs if messages are paced too aggressively.
+        let delay_ms = std::env::var("DETONGER_WRITE_DELAY_MS")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(5);
+        let delay = Duration::from_millis(delay_ms);
         let write_timeout = Duration::from_secs(5);
         let wait_after = Duration::from_secs(2);
 
@@ -113,10 +177,30 @@ impl PrinterConnection {
             );
         }
 
-        for msg in messages {
+        for (index, msg) in messages.iter().enumerate() {
+            if debug && (index == 0 || (index + 1) % 16 == 0 || index + 1 == messages.len()) {
+                eprintln!(
+                    "[detonger] write: progress {}/{} (len={})",
+                    index + 1,
+                    messages.len(),
+                    msg.len()
+                );
+            }
+
             tokio::time::timeout(write_timeout, self.inner.write(msg))
                 .await
-                .map_err(|_| Error::Timeout)??;
+                .map_err(|_| Error::Timeout)
+                .and_then(|result| {
+                    result.map_err(|err| {
+                        Error::Ble(format!(
+                            "write message {}/{} failed (len={}): {}",
+                            index + 1,
+                            messages.len(),
+                            msg.len(),
+                            err
+                        ))
+                    })
+                })?;
 
             if !delay.is_zero() {
                 tokio::time::sleep(delay).await;
@@ -130,6 +214,68 @@ impl PrinterConnection {
 
         if debug {
             eprintln!("[detonger] write: done");
+        }
+
+        Ok(())
+    }
+
+    async fn write_raw_payload(&mut self, payload: &[u8], chunk_size: usize) -> Result<()> {
+        let delay_ms = std::env::var("DETONGER_WRITE_DELAY_MS")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(5);
+        let delay = Duration::from_millis(delay_ms);
+        let write_timeout = Duration::from_secs(5);
+        let wait_after = Duration::from_secs(2);
+
+        let debug = std::env::var_os("DETONGER_DEBUG").is_some();
+        if debug {
+            eprintln!(
+                "[detonger] raw-write: start (bytes={}, chunk_size={}, delay={:?}, write_timeout={:?})",
+                payload.len(),
+                chunk_size,
+                delay,
+                write_timeout
+            );
+        }
+
+        let total_chunks = payload.len().div_ceil(chunk_size);
+        for (index, chunk) in payload.chunks(chunk_size).enumerate() {
+            if debug && (index == 0 || (index + 1) % 16 == 0 || index + 1 == total_chunks) {
+                eprintln!(
+                    "[detonger] raw-write: progress {}/{} (len={})",
+                    index + 1,
+                    total_chunks,
+                    chunk.len()
+                );
+            }
+
+            tokio::time::timeout(write_timeout, self.inner.write(chunk))
+                .await
+                .map_err(|_| Error::Timeout)
+                .and_then(|result| {
+                    result.map_err(|err| {
+                        Error::Ble(format!(
+                            "raw write chunk {}/{} failed (len={}): {}",
+                            index + 1,
+                            total_chunks,
+                            chunk.len(),
+                            err
+                        ))
+                    })
+                })?;
+
+            if !delay.is_zero() {
+                tokio::time::sleep(delay).await;
+            }
+        }
+
+        if !wait_after.is_zero() {
+            tokio::time::sleep(wait_after).await;
+        }
+
+        if debug {
+            eprintln!("[detonger] raw-write: done");
         }
 
         Ok(())

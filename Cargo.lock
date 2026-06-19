@@ -100,6 +100,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c08606f8c3cbf4ce6ec8e28fb0014a2c086708fe954eaa885384a6165172e7e8"
 
 [[package]]
+name = "base64"
+version = "0.22.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
+
+[[package]]
 name = "bitflags"
 version = "2.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -161,6 +167,7 @@ dependencies = [
  "objc2",
  "objc2-core-bluetooth",
  "objc2-foundation",
+ "serde",
  "tokio",
  "tracing",
  "uuid",
@@ -324,6 +331,7 @@ dependencies = [
 name = "detonger"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "clap",
  "detonger-printer",
  "serde",
@@ -340,6 +348,7 @@ dependencies = [
  "futures",
  "objc2",
  "serde",
+ "serde_json",
  "thiserror",
  "tokio",
  "uuid",

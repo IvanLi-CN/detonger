@@ -10,7 +10,8 @@ pub mod split;
 
 pub use encode::{
     FinalizeMode, encode_bitmap_job_messages, encode_bitmap_job_payload, encode_png_job_messages,
-    encode_width_test_job_messages, render_width_test_png,
+    encode_png_job_messages_in_chunks, encode_png_job_messages_with_finalize, encode_width_test_job_messages,
+    encode_width_test_job_messages_with_finalize, render_width_test_png,
 };
 pub use split::split_vendor_messages;
 
